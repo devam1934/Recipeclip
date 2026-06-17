@@ -21,5 +21,11 @@
   ],
   "action": {
     "default_title": "RecipeClip"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["youtube/page-reader.js"],
+      "matches": ["https://www.youtube.com/*"]
+    }
+  ]
 }
