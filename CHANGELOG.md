@@ -32,3 +32,7 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
 - Backend caching: results are cached in Workers KV by video id (best-effort,
   with TTL), so each video costs at most one LLM call. Cache hits are flagged
   `cached: true` in the response.
+- Polish: README "known limitations" + "failure handling" sections; verified
+  pure logic (request validation, recipe normalization, prompt building,
+  Markdown export) with passing unit checks; both halves typecheck and the
+  extension builds clean.

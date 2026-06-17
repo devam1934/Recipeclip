@@ -117,3 +117,24 @@ handling of no-transcript, non-recipe, and network-error cases.
 
 **Out of scope (v2+):** comment mining, OCR of on-screen quantities, multi-recipe
 videos, accounts/auth, payments.
+
+## Known limitations (v1)
+
+- **Transcript availability.** YouTube increasingly rate-limits/blocks the
+  `fmt=json3` caption endpoint depending on region and login state. The
+  "Show transcript" panel scrape is the fallback; if both fail the panel shows a
+  clean "no transcript" message. All of this lives in `youtube/transcript.ts`.
+- **SPA navigation.** The button re-injects on in-app navigation, and the
+  page-reader is injected fresh per request so it reflects the current video.
+- **Service-worker state.** Panel state is held in memory in the service worker
+  (one active recipe at a time, per v1 scope). If Chrome evicts the worker
+  mid-flow, re-click **Get recipe**.
+- **Model.** The Claude model is a constant in `backend/src/llm/anthropic.ts`;
+  change it there. Swapping providers means writing a new `RecipeExtractor`.
+
+## Failure handling
+
+Every expected failure has a clean path: no transcript (typed `no_transcript`),
+non-recipe video (`not_a_recipe`, detected by the model), malformed input
+(`bad_request`), LLM/provider errors (`llm_error`), and backend-unreachable
+(surfaced as a friendly "is it running?" message in the panel).
