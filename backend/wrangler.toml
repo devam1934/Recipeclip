@@ -1,0 +1,16 @@
+name = "recipeclip-backend"
+main = "src/handler.ts"
+compatibility_date = "2024-08-21"
+compatibility_flags = ["nodejs_compat"]
+
+# Cache of extracted recipes, keyed by YouTube video id.
+# Create with:  npx wrangler kv namespace create RECIPE_CACHE
+# then paste the returned id below. A local namespace is used automatically
+# during `wrangler dev`, so this is only needed for deploys.
+[[kv_namespaces]]
+binding = "RECIPE_CACHE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+# Non-secret config. The API key is NOT here — it is a secret (see README).
+CACHE_TTL_SECONDS = "2592000"

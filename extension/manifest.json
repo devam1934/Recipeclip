@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "RecipeClip",
+  "version": "0.1.0",
+  "description": "Turn a YouTube cooking video into a clean, editable recipe card.",
+  "permissions": ["sidePanel", "storage", "activeTab", "scripting"],
+  "host_permissions": ["https://www.youtube.com/*"],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/panel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/watch*"],
+      "js": ["content/inject-button.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "RecipeClip"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "recipeclip-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RecipeClip backend: a single Cloudflare Worker holding the LLM key.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.27.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240821.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.72.0"
+  }
+}

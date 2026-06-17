@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Secrets
+.env
+.dev.vars
+
+# Build output
+extension/dist/
+backend/dist/
+*.tsbuildinfo
+
+# Wrangler / Cloudflare
+.wrangler/
+
+# OS / editor
+.DS_Store
+*.log
