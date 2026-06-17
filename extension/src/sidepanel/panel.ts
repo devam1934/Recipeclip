@@ -1,305 +1,482 @@
-// Side panel renderer. Subscribes to state owned by the service worker and
-// draws the matching view. The recipe card is editable in place: fields are
-// contentEditable and rows can be added/removed. On copy/export/save we read
-// the live DOM back into a Recipe (readRecipeFromDom), so we never have to sync
-// on every keystroke.
+// Side panel renderer.
+//
+// The card is "view-first": a clean, scannable read-only view by default, with
+// an Edit toggle that turns fields into editable inputs. View mode adds the
+// cooking affordances — tick-off checklists (persisted per video), a servings
+// scaler, and collapsible sections. The service worker owns the fetch/loading
+// state; everything below is local UI state.
 
 import { isMessage, type Message, type PanelState } from "../shared/messages";
-import type { Recipe, SourceConfidence } from "../shared/types";
+import type { Recipe } from "../shared/types";
 import { formatTimestamp, toMarkdown } from "./export";
-import { saveRecipe } from "./storage";
+import { scaleAmount, scaleServings } from "./scale";
+import { loadChecks, saveChecks, saveRecipe, type Checks } from "./storage";
 
 const app = document.getElementById("app")!;
 
-// The video the current card belongs to — needed for deep-links and saving.
-let currentVideoId: string | null = null;
+// --- local UI state --------------------------------------------------------
+
+let recipe: Recipe | null = null;
+let videoId: string | null = null;
+let editMode = false;
+let scale = 1;
+const collapsed = { ingredients: false, steps: false };
+const checkedIngredients = new Set<number>();
+const checkedSteps = new Set<number>();
 
 // --- bootstrap -------------------------------------------------------------
 
 chrome.runtime.sendMessage({ type: "GET_STATE" } satisfies Message).then(
-  (state: PanelState | undefined) => render(state ?? { status: "idle" }),
-  () => render({ status: "idle" }),
+  (state: PanelState | undefined) => handleState(state ?? { status: "idle" }),
+  () => handleState({ status: "idle" }),
 );
 
 chrome.runtime.onMessage.addListener((raw) => {
-  if (isMessage(raw) && raw.type === "STATE_UPDATE") render(raw.state);
+  if (isMessage(raw) && raw.type === "STATE_UPDATE") handleState(raw.state);
 });
 
-// --- top-level rendering ---------------------------------------------------
+function handleState(state: PanelState): void {
+  if (state.status !== "ready") {
+    recipe = null;
+    app.replaceChildren(nonReadyView(state));
+    return;
+  }
 
-function render(state: PanelState): void {
-  app.replaceChildren(viewFor(state));
+  // New recipe: reset all local view state.
+  recipe = structuredClone(state.recipe);
+  videoId = state.videoId;
+  editMode = false;
+  scale = 1;
+  collapsed.ingredients = false;
+  collapsed.steps = false;
+  checkedIngredients.clear();
+  checkedSteps.clear();
+  renderCard();
+
+  // Restore any ticked-off items for this video.
+  void loadChecks(state.videoId).then((checks) => {
+    checks.ingredients.forEach((i) => checkedIngredients.add(i));
+    checks.steps.forEach((i) => checkedSteps.add(i));
+    if (recipe) renderCard();
+  });
 }
 
-function viewFor(state: PanelState): Node {
+function nonReadyView(state: PanelState): Node {
   switch (state.status) {
-    case "idle":
-      return message("Open a YouTube recipe and click “Get recipe”.");
-    case "loading":
-      return loading(state.title);
+    case "loading": {
+      const wrap = el("div", "state");
+      wrap.appendChild(el("div", "spinner"));
+      wrap.appendChild(textEl("p", state.title ? `Reading “${state.title}”…` : "Reading recipe…"));
+      return wrap;
+    }
     case "error":
       return message(state.message, "😕");
-    case "ready":
-      currentVideoId = state.videoId;
-      return recipeCard(state.recipe);
+    case "idle":
+    default:
+      return message("Open a YouTube recipe and click “Get recipe”.", "🍳");
   }
 }
 
-function loading(title?: string): Node {
-  const wrap = div("state");
-  wrap.appendChild(div("spinner"));
-  wrap.appendChild(text("p", title ? `Reading “${title}”…` : "Reading recipe…"));
+function message(msg: string, icon: string): Node {
+  const wrap = el("div", "state");
+  wrap.appendChild(textEl("div", icon, "icon"));
+  wrap.appendChild(textEl("p", msg));
   return wrap;
 }
 
-function message(msg: string, icon = "🍳"): Node {
-  const wrap = div("state");
-  wrap.appendChild(text("div", icon));
-  wrap.appendChild(text("p", msg));
-  return wrap;
+// --- the card --------------------------------------------------------------
+
+function renderCard(): void {
+  if (!recipe) return;
+  app.replaceChildren(card(recipe));
 }
 
-// --- editable recipe card --------------------------------------------------
-
-function recipeCard(recipe: Recipe): Node {
+function card(r: Recipe): DocumentFragment {
   const frag = document.createDocumentFragment();
 
-  frag.appendChild(editable("h1", recipe.title, "r-title", "Recipe title"));
+  // Title + confidence
+  const top = el("div", "top");
+  const title = textEl("h1", r.title, "title");
+  if (editMode) makeEditable(title, "r-title", "Recipe title");
+  top.appendChild(title);
+  const conf = textEl("span", `${r.sourceConfidence}`, "conf");
+  conf.classList.add(r.sourceConfidence);
+  top.appendChild(conf);
+  frag.appendChild(top);
 
-  const meta = div("meta");
-  meta.append(
-    document.createTextNode("Serves "),
-    editable("span", recipe.servings ?? "", "r-servings", "?"),
-    document.createTextNode(" · "),
-    editable("span", recipe.totalTime ?? "", "r-totaltime", "total time"),
-  );
-  frag.appendChild(meta);
+  // Chips (serves / time)
+  frag.appendChild(chips(r));
 
-  const badge = text("span", `${recipe.sourceConfidence} confidence`, "badge");
-  badge.classList.add(recipe.sourceConfidence);
-  badge.dataset.confidence = recipe.sourceConfidence;
-  frag.appendChild(badge);
+  // Servings scaler (view mode only)
+  if (!editMode) frag.appendChild(scaleRow());
 
-  // Ingredients
-  frag.appendChild(text("h2", "Ingredients"));
-  const ul = document.createElement("ul");
-  ul.className = "ingredients";
-  ul.id = "ingredient-list";
-  recipe.ingredients.forEach((ing) => ul.appendChild(ingredientRow(ing)));
-  frag.appendChild(ul);
+  // Control bar (view/edit toggle + actions)
+  frag.appendChild(controlBar());
+
+  // Sections
   frag.appendChild(
-    addRowButton("+ ingredient", () =>
-      ul.appendChild(ingredientRow({ name: "", amount: null, unit: null, uncertain: false })),
-    ),
+    section("Ingredients", "ingredients", `${r.ingredients.length} items`, ingredientsBody(r)),
   );
-
-  // Steps
-  frag.appendChild(text("h2", "Steps"));
-  const ol = document.createElement("ol");
-  ol.className = "steps";
-  ol.id = "step-list";
-  recipe.steps.forEach((step) => ol.appendChild(stepRow(step.instruction, step.timestamp)));
-  frag.appendChild(ol);
   frag.appendChild(
-    addRowButton("+ step", () => ol.appendChild(stepRow("", null))),
+    section("Steps", "steps", `${r.steps.length} steps`, stepsBody(r)),
   );
 
   // Notes
-  frag.appendChild(text("h2", "Notes"));
-  frag.appendChild(editable("div", recipe.notes ?? "", "r-notes notes", "Add notes…"));
+  if (editMode) {
+    frag.appendChild(textEl("h2", "Notes", "section-head"));
+    const notes = textEl("div", r.notes ?? "", "notes");
+    makeEditable(notes, "r-notes", "Add notes…");
+    frag.appendChild(notes);
+  } else if (r.notes) {
+    frag.appendChild(textEl("div", r.notes, "notes"));
+  }
 
-  frag.appendChild(toolbar());
-  frag.appendChild(text("div", "", "status"));
-
+  frag.appendChild(textEl("div", "", "status"));
   return frag;
 }
 
-function ingredientRow(ing: Recipe["ingredients"][number]): HTMLElement {
-  const li = document.createElement("li");
-  li.className = "ing-row";
-  li.append(
-    editable("span", ing.amount ?? "", "ing-amount", "qty"),
-    editable("span", ing.unit ?? "", "ing-unit", "unit"),
-    editable("span", ing.name, "ing-name", "ingredient"),
-    uncertainToggle(ing.uncertain),
-    removeButton(li),
-  );
-  return li;
-}
+function chips(r: Recipe): HTMLElement {
+  const wrap = el("div", "chips");
 
-function stepRow(instruction: string, timestamp: number | null): HTMLElement {
-  const li = document.createElement("li");
-  li.className = "step-row";
-  if (timestamp !== null) li.dataset.ts = String(timestamp);
-  li.append(editable("span", instruction, "step-text", "step…"));
-  if (timestamp !== null) li.append(timestampLink(timestamp));
-  li.append(removeButton(li));
-  return li;
-}
-
-/** A toggle chip; presence of the `.on` class is read back as `uncertain`. */
-function uncertainToggle(on: boolean): HTMLElement {
-  const chip = text("span", "approx", "uncertain");
-  chip.title = "Toggle uncertain amount";
-  chip.style.opacity = on ? "1" : "0.4";
-  if (on) chip.classList.add("on");
-  chip.addEventListener("click", () => {
-    const nowOn = chip.classList.toggle("on");
-    chip.style.opacity = nowOn ? "1" : "0.4";
-  });
-  return chip;
-}
-
-function timestampLink(seconds: number): HTMLElement {
-  const link = document.createElement("a");
-  link.className = "ts";
-  link.textContent = formatTimestamp(seconds);
-  if (currentVideoId) {
-    link.href = `https://www.youtube.com/watch?v=${currentVideoId}&t=${seconds}s`;
+  const serves = el("span", "chip");
+  serves.appendChild(document.createTextNode("🍽 "));
+  if (editMode) {
+    serves.appendChild(document.createTextNode("Serves "));
+    serves.appendChild(makeEditable(textEl("span", r.servings ?? ""), "r-servings", "?"));
+  } else {
+    serves.appendChild(document.createTextNode(`Serves ${scaleServings(r.servings, scale) ?? "?"}`));
   }
-  link.target = "_blank";
-  link.rel = "noopener";
-  link.addEventListener("click", (e) => {
-    e.preventDefault();
+  wrap.appendChild(serves);
+
+  const time = el("span", "chip");
+  time.appendChild(document.createTextNode("⏱ "));
+  if (editMode) {
+    time.appendChild(makeEditable(textEl("span", r.totalTime ?? ""), "r-totaltime", "total time"));
+  } else if (r.totalTime) {
+    time.appendChild(document.createTextNode(r.totalTime));
+  } else {
+    return wrap; // no time chip if unknown and not editing
+  }
+  wrap.appendChild(time);
+  return wrap;
+}
+
+function scaleRow(): HTMLElement {
+  const wrap = el("div", "scale");
+  wrap.appendChild(textEl("span", "Scale", "lbl"));
+  const seg = el("div", "seg");
+  for (const factor of [0.5, 1, 2]) {
+    const btn = textEl("button", factor === 1 ? "1×" : factor === 0.5 ? "½×" : "2×");
+    if (factor === scale) btn.classList.add("on");
+    btn.addEventListener("click", () => {
+      scale = factor;
+      renderCard();
+    });
+    seg.appendChild(btn);
+  }
+  wrap.appendChild(seg);
+  return wrap;
+}
+
+function controlBar(): HTMLElement {
+  const bar = el("div", "bar");
+
+  const seg = el("div", "seg");
+  const viewBtn = textEl("button", "View");
+  const editBtn = textEl("button", "Edit");
+  (editMode ? editBtn : viewBtn).classList.add("on");
+  viewBtn.addEventListener("click", () => setEditMode(false));
+  editBtn.addEventListener("click", () => setEditMode(true));
+  seg.append(viewBtn, editBtn);
+  bar.appendChild(seg);
+
+  const actions = el("div", "actions");
+  actions.append(
+    actionBtn("Copy", onCopy),
+    actionBtn("Export", onExport),
+    actionBtn("Save", onSave),
+  );
+  bar.appendChild(actions);
+  return bar;
+}
+
+function section(
+  title: string,
+  key: "ingredients" | "steps",
+  count: string,
+  body: HTMLElement,
+): HTMLElement {
+  const wrap = el("div", "section");
+  const head = el("div", "section-head");
+  if (collapsed[key]) head.classList.add("collapsed");
+  head.append(
+    textEl("span", "▾", "caret"),
+    textEl("h2", title),
+    textEl("span", count, "count"),
+  );
+  head.addEventListener("click", () => {
+    collapsed[key] = !collapsed[key];
+    renderCard();
+  });
+  wrap.appendChild(head);
+  if (!collapsed[key]) wrap.appendChild(body);
+  return wrap;
+}
+
+function ingredientsBody(r: Recipe): HTMLElement {
+  const wrap = el("div");
+
+  r.ingredients.forEach((ing, i) => {
+    const row = el("div", "row");
+
+    if (editMode) {
+      const edit = el("div", "ing-edit");
+      edit.append(
+        makeEditable(textEl("span", ing.amount ?? "", "ing-amount"), undefined, "qty"),
+        makeEditable(textEl("span", ing.unit ?? "", "ing-unit"), undefined, "unit"),
+        makeEditable(textEl("span", ing.name, "ing-name"), undefined, "ingredient"),
+      );
+      row.append(edit, uncertainToggle(ing.uncertain), removeButton(row));
+    } else {
+      if (checkedIngredients.has(i)) row.classList.add("done");
+      const check = textEl("span", "✓", "check");
+      check.addEventListener("click", () => toggleCheck(row, check, checkedIngredients, i));
+      const text = el("span", "text");
+      const qty = [scaleAmount(ing.amount, scale), ing.unit].filter(Boolean).join(" ");
+      if (qty) text.appendChild(textEl("span", qty + " ", "amount"));
+      text.appendChild(document.createTextNode(ing.name));
+      if (ing.uncertain) text.appendChild(textEl("span", "approx", "tag"));
+      row.append(check, text);
+    }
+    wrap.appendChild(row);
+  });
+
+  if (editMode) {
+    wrap.appendChild(addRow("+ ingredient", () => {
+      recipe?.ingredients.push({ name: "", amount: null, unit: null, uncertain: false });
+      readDomIntoRecipe();
+      renderCard();
+    }));
+  }
+  return wrap;
+}
+
+function stepsBody(r: Recipe): HTMLElement {
+  const wrap = el("div");
+
+  r.steps.forEach((step, i) => {
+    const row = el("div", "row");
+    if (step.timestamp !== null) row.dataset.ts = String(step.timestamp);
+
+    if (editMode) {
+      row.append(
+        textEl("span", String(i + 1), "num"),
+        makeEditable(textEl("div", step.instruction, "step-text text"), undefined, "step…"),
+        removeButton(row),
+      );
+    } else {
+      if (checkedSteps.has(i)) row.classList.add("done");
+      const num = textEl("span", checkedSteps.has(i) ? "✓" : String(i + 1), "num");
+      num.addEventListener("click", () => {
+        const on = toggleCheck(row, null, checkedSteps, i);
+        num.textContent = on ? "✓" : String(i + 1);
+      });
+      const col = el("div", "text");
+      col.appendChild(textEl("div", step.instruction));
+      if (step.timestamp !== null) col.appendChild(timestampPill(step.timestamp));
+      row.append(num, col);
+    }
+    wrap.appendChild(row);
+  });
+
+  if (editMode) {
+    wrap.appendChild(addRow("+ step", () => {
+      recipe?.steps.push({ instruction: "", timestamp: null });
+      readDomIntoRecipe();
+      renderCard();
+    }));
+  }
+  return wrap;
+}
+
+// --- interactions ----------------------------------------------------------
+
+function setEditMode(on: boolean): void {
+  if (on === editMode) return;
+  if (!on) readDomIntoRecipe(); // leaving edit: capture changes
+  editMode = on;
+  renderCard();
+}
+
+/** Toggle a checklist item; persist; return the new checked state. */
+function toggleCheck(
+  row: HTMLElement,
+  check: HTMLElement | null,
+  set: Set<number>,
+  index: number,
+): boolean {
+  const now = !set.has(index);
+  if (now) set.add(index);
+  else set.delete(index);
+  row.classList.toggle("done", now);
+  void check; // styling handled via the row's .done class
+  persistChecks();
+  return now;
+}
+
+function persistChecks(): void {
+  if (!videoId) return;
+  const checks: Checks = {
+    ingredients: [...checkedIngredients],
+    steps: [...checkedSteps],
+  };
+  void saveChecks(videoId, checks);
+}
+
+function timestampPill(seconds: number): HTMLElement {
+  const pill = textEl("button", `▶ ${formatTimestamp(seconds)}`, "ts");
+  pill.addEventListener("click", () => {
     chrome.runtime.sendMessage({ type: "SEEK", seconds } satisfies Message).catch(() => {});
   });
-  return link;
-}
-
-function toolbar(): HTMLElement {
-  const bar = div("toolbar");
-  bar.append(
-    actionButton("Copy", onCopy),
-    actionButton("Export .md", onExport),
-    actionButton("Save", onSave, true),
-  );
-  return bar;
+  return pill;
 }
 
 // --- toolbar actions -------------------------------------------------------
 
 async function onCopy(): Promise<void> {
-  await navigator.clipboard.writeText(toMarkdown(readRecipeFromDom()));
+  await navigator.clipboard.writeText(toMarkdown(effectiveRecipe()));
   setStatus("Copied to clipboard.");
 }
 
 function onExport(): void {
-  const recipe = readRecipeFromDom();
-  const blob = new Blob([toMarkdown(recipe)], { type: "text/markdown" });
+  const r = effectiveRecipe();
+  const blob = new Blob([toMarkdown(r)], { type: "text/markdown" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${slugify(recipe.title) || "recipe"}.md`;
+  a.download = `${slugify(r.title) || "recipe"}.md`;
   a.click();
   URL.revokeObjectURL(url);
   setStatus("Markdown downloaded.");
 }
 
 async function onSave(): Promise<void> {
-  if (!currentVideoId) return;
-  await saveRecipe(currentVideoId, readRecipeFromDom());
+  if (!videoId || !recipe) return;
+  if (editMode) readDomIntoRecipe();
+  await saveRecipe(videoId, recipe); // save the base (unscaled) recipe
   setStatus("Saved.");
 }
 
-// --- read the edited DOM back into a Recipe --------------------------------
+/** The recipe as currently shown: edits captured, scaling applied. */
+function effectiveRecipe(): Recipe {
+  if (editMode) readDomIntoRecipe();
+  const base = recipe!;
+  return {
+    ...base,
+    servings: scaleServings(base.servings, scale),
+    ingredients: base.ingredients.map((ing) => ({
+      ...ing,
+      amount: scaleAmount(ing.amount, scale),
+    })),
+  };
+}
 
-function readRecipeFromDom(): Recipe {
-  const ingredients = Array.from(
-    document.querySelectorAll<HTMLElement>("#ingredient-list .ing-row"),
-  )
-    .map((row) => ({
-      amount: readText(row.querySelector(".ing-amount")) || null,
-      unit: readText(row.querySelector(".ing-unit")) || null,
-      name: readText(row.querySelector(".ing-name")),
-      uncertain: !!row.querySelector(".uncertain.on"),
+// --- read edited DOM back into `recipe` ------------------------------------
+
+function readDomIntoRecipe(): void {
+  if (!recipe) return;
+
+  const ingredients = Array.from(app.querySelectorAll<HTMLElement>(".ing-edit"))
+    .map((edit) => ({
+      amount: readText(edit.querySelector(".ing-amount")) || null,
+      unit: readText(edit.querySelector(".ing-unit")) || null,
+      name: readText(edit.querySelector(".ing-name")),
+      uncertain: !!edit.parentElement?.querySelector(".uncertain.on"),
     }))
     .filter((i) => i.name !== "");
 
-  const steps = Array.from(
-    document.querySelectorAll<HTMLElement>("#step-list .step-row"),
-  )
+  const steps = Array.from(app.querySelectorAll<HTMLElement>(".row"))
+    .filter((row) => row.querySelector(".step-text"))
     .map((row) => ({
       instruction: readText(row.querySelector(".step-text")),
       timestamp: row.dataset.ts !== undefined ? Number(row.dataset.ts) : null,
     }))
     .filter((s) => s.instruction !== "");
 
-  const badge = document.querySelector<HTMLElement>(".badge");
-
-  return {
-    title: readText(document.querySelector(".r-title")) || "Untitled recipe",
-    servings: readText(document.querySelector(".r-servings")) || null,
-    totalTime: readText(document.querySelector(".r-totaltime")) || null,
-    ingredients,
-    steps,
-    notes: readText(document.querySelector(".r-notes")) || null,
-    sourceConfidence: (badge?.dataset.confidence as SourceConfidence) ?? "low",
-    isRecipe: true,
+  recipe = {
+    ...recipe,
+    title: readText(app.querySelector(".r-title")) || recipe.title,
+    servings: readText(app.querySelector(".r-servings")) || null,
+    totalTime: readText(app.querySelector(".r-totaltime")) || null,
+    notes: readText(app.querySelector(".r-notes")) || null,
+    ingredients: ingredients.length ? ingredients : recipe.ingredients,
+    steps: steps.length ? steps : recipe.steps,
   };
 }
 
 // --- small DOM helpers -----------------------------------------------------
 
-function editable(
-  tag: string,
-  content: string,
-  className: string,
-  placeholder: string,
-): HTMLElement {
-  const el = document.createElement(tag);
-  el.className = className;
-  el.textContent = content;
-  el.contentEditable = "true";
-  el.dataset.placeholder = placeholder;
-  return el;
+function uncertainToggle(on: boolean): HTMLElement {
+  const chip = textEl("span", "approx", "uncertain tag");
+  chip.title = "Toggle uncertain amount";
+  chip.style.opacity = on ? "1" : "0.4";
+  if (on) chip.classList.add("on");
+  chip.addEventListener("click", () => {
+    chip.style.opacity = chip.classList.toggle("on") ? "1" : "0.4";
+  });
+  return chip;
 }
 
-function addRowButton(label: string, onClick: () => void): HTMLElement {
-  const btn = text("button", label, "add-row");
+function removeButton(row: HTMLElement): HTMLElement {
+  const btn = textEl("button", "✕", "row-remove");
+  btn.title = "Remove";
+  btn.addEventListener("click", () => {
+    row.remove();
+    readDomIntoRecipe();
+  });
+  return btn;
+}
+
+function addRow(label: string, onClick: () => void): HTMLElement {
+  const btn = textEl("button", label, "add-row");
   btn.addEventListener("click", onClick);
   return btn;
 }
 
-function removeButton(row: HTMLElement): HTMLElement {
-  const btn = text("button", "✕", "row-remove");
-  btn.title = "Remove";
-  btn.addEventListener("click", () => row.remove());
-  return btn;
-}
-
-function actionButton(
-  label: string,
-  onClick: () => void | Promise<void>,
-  primary = false,
-): HTMLElement {
-  const btn = text("button", label, "action");
-  if (primary) btn.classList.add("primary");
+function actionBtn(label: string, onClick: () => void | Promise<void>): HTMLElement {
+  const btn = textEl("button", label, "icon-btn");
   btn.addEventListener("click", () => void onClick());
   return btn;
 }
 
+function makeEditable(elm: HTMLElement, className: string | undefined, placeholder: string): HTMLElement {
+  if (className) elm.classList.add(...className.split(" "));
+  elm.contentEditable = "true";
+  elm.dataset.ph = placeholder;
+  return elm;
+}
+
 function setStatus(msg: string): void {
-  const status = document.querySelector<HTMLElement>(".status");
+  const status = app.querySelector<HTMLElement>(".status");
   if (status) status.textContent = msg;
 }
 
-function readText(el: Element | null): string {
-  return el?.textContent?.trim() ?? "";
+function readText(elm: Element | null): string {
+  return elm?.textContent?.trim() ?? "";
 }
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-function div(className: string): HTMLElement {
-  const el = document.createElement("div");
-  el.className = className;
-  return el;
+function el(tag: string, className?: string): HTMLElement {
+  const e = document.createElement(tag);
+  if (className) e.className = className;
+  return e;
 }
 
-function text(tag: string, content: string, className?: string): HTMLElement {
-  const el = document.createElement(tag);
-  el.textContent = content;
-  if (className) el.className = className;
-  return el;
+function textEl(tag: string, content: string, className?: string): HTMLElement {
+  const e = el(tag, className);
+  e.textContent = content;
+  return e;
 }

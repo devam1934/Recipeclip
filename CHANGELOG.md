@@ -5,6 +5,14 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- Redesigned the side-panel card to be view-first and scannable: clean read-only
+  view by default with an Edit toggle, meta shown as chips, and a confidence tag.
+  Added tick-off checklists for ingredients and steps (persisted per video in
+  chrome.storage), a servings scaler (½× / 1× / 2× that rescales amounts and
+  servings on the fly), collapsible Ingredients/Steps sections, and timestamp
+  "play" pills. New `scale.ts` quantity math is unit-tested.
+
 ### Added
 - Project scaffold: `/extension` (Chrome MV3 + esbuild) and `/backend`
   (Cloudflare Worker), shared Recipe types, README, and tooling config.
