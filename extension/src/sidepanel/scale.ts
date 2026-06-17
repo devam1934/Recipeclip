@@ -9,7 +9,7 @@ interface LeadingQuantity {
 }
 
 /** Pull a leading number (int, decimal, fraction, or mixed) off a string. */
-function parseLeadingQuantity(text: string): LeadingQuantity | null {
+export function parseLeadingQuantity(text: string): LeadingQuantity | null {
   const s = text.trimStart();
 
   const mixed = s.match(/^(\d+)\s+(\d+)\/(\d+)/); // "1 1/2"
@@ -32,7 +32,7 @@ function parseLeadingQuantity(text: string): LeadingQuantity | null {
 }
 
 /** Render a number back to a cook-friendly string (whole, fraction, or mixed). */
-function formatQuantity(value: number): string {
+export function formatQuantity(value: number): string {
   const rounded = Math.round(value * 1000) / 1000;
   const whole = Math.floor(rounded);
   const frac = rounded - whole;

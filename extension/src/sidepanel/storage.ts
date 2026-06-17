@@ -23,6 +23,35 @@ export async function loadRecipe(videoId: string): Promise<Recipe | null> {
   return entry?.recipe ?? null;
 }
 
+export interface SavedEntry {
+  videoId: string;
+  recipe: Recipe;
+  savedAt: number;
+}
+
+/** All saved recipes, newest first. */
+export async function listSavedRecipes(): Promise<SavedEntry[]> {
+  const all = await chrome.storage.local.get(null);
+  const out: SavedEntry[] = [];
+  for (const [key, value] of Object.entries(all)) {
+    if (!key.startsWith(KEY_PREFIX)) continue;
+    const entry = value as SavedRecipe;
+    if (entry?.recipe) {
+      out.push({
+        videoId: key.slice(KEY_PREFIX.length),
+        recipe: entry.recipe,
+        savedAt: entry.savedAt ?? 0,
+      });
+    }
+  }
+  out.sort((a, b) => b.savedAt - a.savedAt);
+  return out;
+}
+
+export async function deleteRecipe(videoId: string): Promise<void> {
+  await chrome.storage.local.remove([KEY_PREFIX + videoId, CHECKS_PREFIX + videoId]);
+}
+
 // --- checklist state (which ingredients/steps are ticked off) --------------
 
 const CHECKS_PREFIX = "checks:";

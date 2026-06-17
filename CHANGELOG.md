@@ -5,6 +5,17 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- Ingredients / Steps / Overview tabs with a sticky header, so you switch
+  instead of scrolling.
+- Auto-extracted (free, same LLM call) summary, dietary tags, difficulty,
+  cuisine, and equipment — shown in the header pills and the Overview tab.
+- Unit conversion: an Orig / US / Metric toggle that converts ingredient
+  amounts and units (volume + weight), composing with the servings scaler.
+  Conversion math is unit-tested.
+- Saved-recipes library: browse, search, open, and delete everything saved to
+  chrome.storage, reachable from the bar and the idle screen.
+
 ### Changed
 - Redesigned the side-panel card to be view-first and scannable: clean read-only
   view by default with an Edit toggle, meta shown as chips, and a confidence tag.

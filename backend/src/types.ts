@@ -3,6 +3,8 @@
 
 export type SourceConfidence = "high" | "medium" | "low";
 
+export type Difficulty = "easy" | "medium" | "hard";
+
 export interface Ingredient {
   name: string;
   amount: string | null;
@@ -24,6 +26,12 @@ export interface Recipe {
   notes: string | null;
   sourceConfidence: SourceConfidence;
   isRecipe: boolean;
+
+  summary: string | null;
+  dietaryTags: string[];
+  difficulty: Difficulty | null;
+  cuisine: string | null;
+  equipment: string[];
 }
 
 export interface TranscriptSegment {

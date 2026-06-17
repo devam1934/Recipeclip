@@ -3,6 +3,7 @@
 // well-formed Recipe. The vendor-specific call lives in llm/anthropic.ts.
 
 import type {
+  Difficulty,
   ExtractRequest,
   Ingredient,
   Recipe,
@@ -66,6 +67,15 @@ export const SYSTEM_PROMPT = [
   "CONFIDENCE:",
   "- Set `sourceConfidence` to high/medium/low reflecting how complete and",
   "  reliable the extracted recipe is.",
+  "",
+  "EXTRAS (fill these in from the same content — do not guess wildly):",
+  "- `summary`: a one- or two-sentence description of the dish.",
+  "- `dietaryTags`: lowercase tags that clearly apply, from common ones like",
+  "  vegan, vegetarian, gluten-free, dairy-free, nut-free, keto, low-carb. Only",
+  "  include a tag when the recipe genuinely qualifies; otherwise leave it out.",
+  "- `difficulty`: easy, medium, or hard.",
+  "- `cuisine`: e.g. Italian, Mexican, Thai (or null if unclear).",
+  "- `equipment`: notable tools needed (e.g. blender, 9x13 pan, whisk).",
 ].join("\n");
 
 /** Build the user message from the gathered data. */
@@ -115,7 +125,23 @@ export function normalizeRecipe(raw: unknown): Recipe {
     notes: asNullableString(r.notes),
     sourceConfidence: asConfidence(r.sourceConfidence),
     isRecipe,
+    summary: asNullableString(r.summary),
+    dietaryTags: asStringArray(r.dietaryTags),
+    difficulty: asDifficulty(r.difficulty),
+    cuisine: asNullableString(r.cuisine),
+    equipment: asStringArray(r.equipment),
   };
+}
+
+function asStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((x) => (typeof x === "string" ? x.trim() : ""))
+    .filter((x) => x !== "");
+}
+
+function asDifficulty(v: unknown): Difficulty | null {
+  return v === "easy" || v === "medium" || v === "hard" ? v : null;
 }
 
 function normalizeIngredient(raw: unknown): Ingredient {

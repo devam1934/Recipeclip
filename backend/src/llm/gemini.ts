@@ -50,6 +50,11 @@ const RECIPE_SCHEMA = {
     notes: { type: "string", nullable: true },
     sourceConfidence: { type: "string", enum: ["high", "medium", "low"] },
     isRecipe: { type: "boolean" },
+    summary: { type: "string", nullable: true },
+    dietaryTags: { type: "array", items: { type: "string" } },
+    difficulty: { type: "string", enum: ["easy", "medium", "hard"], nullable: true },
+    cuisine: { type: "string", nullable: true },
+    equipment: { type: "array", items: { type: "string" } },
   },
   required: ["title", "ingredients", "steps", "sourceConfidence", "isRecipe"],
 };

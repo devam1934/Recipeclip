@@ -155,6 +155,45 @@
         border-radius: 8px; color: var(--muted); font-size: 13px;
       }
       .status { color: var(--faint); font-size: 12px; margin-top: 10px; min-height: 15px; }
+
+      /* sticky header + tabs */
+      .head { position: sticky; top: 0; background: var(--bg); z-index: 5; padding-bottom: 4px; }
+      .controls { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 2px; }
+      .ctl { display: flex; align-items: center; gap: 6px; }
+      .ctl .lbl { font-size: 12px; color: var(--faint); }
+      .seg.accent button.on { background: var(--accent); color: var(--accent-fg); }
+      .pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+      .pill { font-size: 11px; padding: 2px 9px; border-radius: 10px; background: var(--info-bg); color: var(--info); }
+      .tabbar { display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid var(--line); }
+      .tab {
+        font: 500 13px Roboto, Arial, sans-serif; padding: 8px 11px; cursor: pointer;
+        border: none; background: none; color: var(--muted);
+        border-bottom: 2px solid transparent; margin-bottom: -1px;
+      }
+      .tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+      .tabbody { padding-top: 8px; }
+      .summary { font-size: 14px; margin: 8px 0; line-height: 1.5; }
+      .ov-label {
+        font-size: 12px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px;
+      }
+      .ov-facts { font-size: 13px; color: var(--muted); margin: 6px 0; }
+
+      /* library */
+      .lib-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+      .lib-head .title { font-size: 17px; }
+      .lib-search {
+        width: 100%; padding: 8px 10px; font: 14px Roboto, Arial, sans-serif;
+        border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+        color: var(--fg); margin-bottom: 8px;
+      }
+      .lib-item {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 0; border-bottom: 1px solid var(--line);
+      }
+      .lib-main { flex: 1; cursor: pointer; }
+      .lib-title { font-size: 14px; font-weight: 500; }
+      .lib-meta { font-size: 12px; color: var(--faint); margin-top: 2px; }
     </style>
   </head>
   <body>

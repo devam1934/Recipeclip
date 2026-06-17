@@ -9,8 +9,17 @@
 import { isMessage, type Message, type PanelState } from "../shared/messages";
 import type { Recipe } from "../shared/types";
 import { formatTimestamp, toMarkdown } from "./export";
-import { scaleAmount, scaleServings } from "./scale";
-import { loadChecks, saveChecks, saveRecipe, type Checks } from "./storage";
+import { scaleServings } from "./scale";
+import { convertMeasure, type UnitSystem } from "./units";
+import {
+  deleteRecipe,
+  listSavedRecipes,
+  loadChecks,
+  saveChecks,
+  saveRecipe,
+  type Checks,
+  type SavedEntry,
+} from "./storage";
 
 const app = document.getElementById("app")!;
 
@@ -20,9 +29,14 @@ let recipe: Recipe | null = null;
 let videoId: string | null = null;
 let editMode = false;
 let scale = 1;
-const collapsed = { ingredients: false, steps: false };
+let units: UnitSystem = "orig";
+let activeTab: Tab = "ingredients";
+let libraryOpen = false;
+let lastState: PanelState = { status: "idle" };
 const checkedIngredients = new Set<number>();
 const checkedSteps = new Set<number>();
+
+type Tab = "ingredients" | "steps" | "overview";
 
 // --- bootstrap -------------------------------------------------------------
 
@@ -36,29 +50,48 @@ chrome.runtime.onMessage.addListener((raw) => {
 });
 
 function handleState(state: PanelState): void {
+  lastState = state;
+  libraryOpen = false; // any SW update returns us to the live view
+
   if (state.status !== "ready") {
     recipe = null;
-    app.replaceChildren(nonReadyView(state));
+    renderRoot();
     return;
   }
 
-  // New recipe: reset all local view state.
-  recipe = structuredClone(state.recipe);
-  videoId = state.videoId;
+  loadRecipeIntoView(structuredClone(state.recipe), state.videoId);
+}
+
+/** Load a recipe (from the backend or the library) into the card view. */
+function loadRecipeIntoView(r: Recipe, id: string): void {
+  recipe = r;
+  videoId = id;
   editMode = false;
   scale = 1;
-  collapsed.ingredients = false;
-  collapsed.steps = false;
+  units = "orig";
+  activeTab = "ingredients";
   checkedIngredients.clear();
   checkedSteps.clear();
-  renderCard();
+  lastState = { status: "ready", recipe: r, videoId: id, cached: true };
+  renderRoot();
 
   // Restore any ticked-off items for this video.
-  void loadChecks(state.videoId).then((checks) => {
+  void loadChecks(id).then((checks) => {
     checks.ingredients.forEach((i) => checkedIngredients.add(i));
     checks.steps.forEach((i) => checkedSteps.add(i));
-    if (recipe) renderCard();
+    if (recipe && !libraryOpen) renderRoot();
   });
+}
+
+/** Single render entry point: library overlay, the card, or a status view. */
+function renderRoot(): void {
+  if (libraryOpen) {
+    app.replaceChildren(libraryView());
+  } else if (lastState.status === "ready" && recipe) {
+    app.replaceChildren(card(recipe));
+  } else {
+    app.replaceChildren(nonReadyView(lastState));
+  }
 }
 
 function nonReadyView(state: PanelState): Node {
@@ -72,8 +105,14 @@ function nonReadyView(state: PanelState): Node {
     case "error":
       return message(state.message, "😕");
     case "idle":
-    default:
-      return message("Open a YouTube recipe and click “Get recipe”.", "🍳");
+    default: {
+      const wrap = message("Open a YouTube recipe and click “Get recipe”.", "🍳");
+      const btn = textEl("button", "Saved recipes", "icon-btn");
+      btn.style.marginTop = "12px";
+      btn.addEventListener("click", openLibrary);
+      wrap.appendChild(btn);
+      return wrap;
+    }
   }
 }
 
@@ -84,17 +123,94 @@ function message(msg: string, icon: string): Node {
   return wrap;
 }
 
+// --- saved-recipes library -------------------------------------------------
+
+function libraryView(): HTMLElement {
+  const wrap = el("div", "library");
+
+  const head = el("div", "lib-head");
+  const back = textEl("button", "← Back", "icon-btn");
+  back.addEventListener("click", () => {
+    libraryOpen = false;
+    renderRoot();
+  });
+  head.append(back, textEl("h1", "Saved recipes", "title"));
+  wrap.appendChild(head);
+
+  const search = document.createElement("input");
+  search.type = "search";
+  search.placeholder = "Search saved recipes…";
+  search.className = "lib-search";
+  wrap.appendChild(search);
+
+  const list = el("div", "lib-list");
+  wrap.appendChild(list);
+
+  // Filter by title without re-rendering (keeps input focus).
+  search.addEventListener("input", () => {
+    const q = search.value.trim().toLowerCase();
+    list.querySelectorAll<HTMLElement>(".lib-item").forEach((item) => {
+      item.style.display = (item.dataset.title ?? "").includes(q) ? "" : "none";
+    });
+  });
+
+  void listSavedRecipes().then((entries) => {
+    if (entries.length === 0) {
+      list.appendChild(textEl("p", "No saved recipes yet.", "summary"));
+      return;
+    }
+    for (const entry of entries) list.appendChild(libraryItem(entry));
+  });
+
+  return wrap;
+}
+
+function libraryItem(entry: SavedEntry): HTMLElement {
+  const item = el("div", "lib-item");
+  item.dataset.title = (entry.recipe.title ?? "").toLowerCase();
+
+  const main = el("div", "lib-main");
+  main.appendChild(textEl("div", entry.recipe.title || "Untitled", "lib-title"));
+  const meta: string[] = [];
+  if (entry.recipe.cuisine) meta.push(entry.recipe.cuisine);
+  const tags = entry.recipe.dietaryTags ?? [];
+  if (tags.length) meta.push(tags.slice(0, 2).join(", "));
+  meta.push(formatDate(entry.savedAt));
+  main.appendChild(textEl("div", meta.filter(Boolean).join(" · "), "lib-meta"));
+  main.addEventListener("click", () => openSaved(entry));
+  item.appendChild(main);
+
+  const del = textEl("button", "✕", "row-remove");
+  del.title = "Delete";
+  del.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void deleteRecipe(entry.videoId).then(() => item.remove());
+  });
+  item.appendChild(del);
+  return item;
+}
+
+function openSaved(entry: SavedEntry): void {
+  loadRecipeIntoView(structuredClone(entry.recipe), entry.videoId);
+}
+
+function formatDate(ms: number): string {
+  if (!ms) return "";
+  return new Date(ms).toLocaleDateString();
+}
+
 // --- the card --------------------------------------------------------------
 
 function renderCard(): void {
-  if (!recipe) return;
-  app.replaceChildren(card(recipe));
+  renderRoot();
 }
 
 function card(r: Recipe): DocumentFragment {
   const frag = document.createDocumentFragment();
 
-  // Title + confidence
+  // --- sticky header: stays put while a tab's list scrolls ---
+  const head = el("div", "head");
+
   const top = el("div", "top");
   const title = textEl("h1", r.title, "title");
   if (editMode) makeEditable(title, "r-title", "Recipe title");
@@ -102,37 +218,99 @@ function card(r: Recipe): DocumentFragment {
   const conf = textEl("span", `${r.sourceConfidence}`, "conf");
   conf.classList.add(r.sourceConfidence);
   top.appendChild(conf);
-  frag.appendChild(top);
+  head.appendChild(top);
 
-  // Chips (serves / time)
-  frag.appendChild(chips(r));
+  head.appendChild(chips(r));
 
-  // Servings scaler (view mode only)
-  if (!editMode) frag.appendChild(scaleRow());
+  const pills = dietaryPills(r);
+  if (pills) head.appendChild(pills);
 
-  // Control bar (view/edit toggle + actions)
-  frag.appendChild(controlBar());
+  if (!editMode) head.appendChild(controlsRow());
+  head.appendChild(controlBar());
+  head.appendChild(tabBar(r));
+  frag.appendChild(head);
 
-  // Sections
-  frag.appendChild(
-    section("Ingredients", "ingredients", `${r.ingredients.length} items`, ingredientsBody(r)),
-  );
-  frag.appendChild(
-    section("Steps", "steps", `${r.steps.length} steps`, stepsBody(r)),
-  );
-
-  // Notes
-  if (editMode) {
-    frag.appendChild(textEl("h2", "Notes", "section-head"));
-    const notes = textEl("div", r.notes ?? "", "notes");
-    makeEditable(notes, "r-notes", "Add notes…");
-    frag.appendChild(notes);
-  } else if (r.notes) {
-    frag.appendChild(textEl("div", r.notes, "notes"));
-  }
-
+  // --- active tab body ---
+  frag.appendChild(tabBody(r));
   frag.appendChild(textEl("div", "", "status"));
   return frag;
+}
+
+function dietaryPills(r: Recipe): HTMLElement | null {
+  const tags = r.dietaryTags ?? [];
+  if (tags.length === 0) return null;
+  const wrap = el("div", "pills");
+  for (const tag of tags) wrap.appendChild(textEl("span", tag, "pill"));
+  return wrap;
+}
+
+function tabBar(r: Recipe): HTMLElement {
+  const bar = el("div", "tabbar");
+  const tabs: [Tab, string][] = [
+    ["ingredients", `Ingredients · ${r.ingredients.length}`],
+    ["steps", `Steps · ${r.steps.length}`],
+    ["overview", "Overview"],
+  ];
+  for (const [key, label] of tabs) {
+    const tab = textEl("button", label, "tab");
+    if (key === activeTab) tab.classList.add("on");
+    tab.addEventListener("click", () => {
+      if (editMode) readDomIntoRecipe(); // keep edits from the current tab
+      activeTab = key;
+      renderCard();
+    });
+    bar.appendChild(tab);
+  }
+  return bar;
+}
+
+function tabBody(r: Recipe): HTMLElement {
+  const body = el("div", "tabbody");
+  if (activeTab === "ingredients") body.appendChild(ingredientsBody(r));
+  else if (activeTab === "steps") body.appendChild(stepsBody(r));
+  else body.appendChild(overviewBody(r));
+  return body;
+}
+
+function overviewBody(r: Recipe): HTMLElement {
+  const wrap = el("div");
+
+  if (editMode) {
+    wrap.appendChild(textEl("div", "Summary", "ov-label"));
+    const summary = textEl("div", r.summary ?? "", "notes");
+    makeEditable(summary, "r-summary", "Short summary…");
+    wrap.appendChild(summary);
+  } else if (r.summary) {
+    wrap.appendChild(textEl("p", r.summary, "summary"));
+  }
+
+  const facts: string[] = [];
+  if (r.difficulty) facts.push(`Difficulty: ${r.difficulty}`);
+  if (r.cuisine) facts.push(`Cuisine: ${r.cuisine}`);
+  if (facts.length) wrap.appendChild(textEl("div", facts.join("  ·  "), "ov-facts"));
+
+  const equipment = r.equipment ?? [];
+  if (equipment.length) {
+    wrap.appendChild(textEl("div", "Equipment", "ov-label"));
+    const list = el("div", "pills");
+    for (const item of equipment) list.appendChild(textEl("span", item, "pill"));
+    wrap.appendChild(list);
+  }
+
+  if (editMode) {
+    wrap.appendChild(textEl("div", "Notes", "ov-label"));
+    const notes = textEl("div", r.notes ?? "", "notes");
+    makeEditable(notes, "r-notes", "Add notes…");
+    wrap.appendChild(notes);
+  } else if (r.notes) {
+    wrap.appendChild(textEl("div", "Notes", "ov-label"));
+    wrap.appendChild(textEl("div", r.notes, "notes"));
+  }
+
+  if (!wrap.hasChildNodes()) {
+    wrap.appendChild(textEl("p", "No extra details for this recipe.", "summary"));
+  }
+  return wrap;
 }
 
 function chips(r: Recipe): HTMLElement {
@@ -161,10 +339,12 @@ function chips(r: Recipe): HTMLElement {
   return wrap;
 }
 
-function scaleRow(): HTMLElement {
-  const wrap = el("div", "scale");
-  wrap.appendChild(textEl("span", "Scale", "lbl"));
-  const seg = el("div", "seg");
+function controlsRow(): HTMLElement {
+  const wrap = el("div", "controls");
+
+  const scaleCtl = el("div", "ctl");
+  scaleCtl.appendChild(textEl("span", "Scale", "lbl"));
+  const scaleSeg = el("div", "seg accent");
   for (const factor of [0.5, 1, 2]) {
     const btn = textEl("button", factor === 1 ? "1×" : factor === 0.5 ? "½×" : "2×");
     if (factor === scale) btn.classList.add("on");
@@ -172,9 +352,27 @@ function scaleRow(): HTMLElement {
       scale = factor;
       renderCard();
     });
-    seg.appendChild(btn);
+    scaleSeg.appendChild(btn);
   }
-  wrap.appendChild(seg);
+  scaleCtl.appendChild(scaleSeg);
+  wrap.appendChild(scaleCtl);
+
+  const unitCtl = el("div", "ctl");
+  unitCtl.appendChild(textEl("span", "Units", "lbl"));
+  const unitSeg = el("div", "seg accent");
+  const opts: [UnitSystem, string][] = [["orig", "Orig"], ["us", "US"], ["metric", "Metric"]];
+  for (const [sys, label] of opts) {
+    const btn = textEl("button", label);
+    if (sys === units) btn.classList.add("on");
+    btn.addEventListener("click", () => {
+      units = sys;
+      renderCard();
+    });
+    unitSeg.appendChild(btn);
+  }
+  unitCtl.appendChild(unitSeg);
+  wrap.appendChild(unitCtl);
+
   return wrap;
 }
 
@@ -192,6 +390,7 @@ function controlBar(): HTMLElement {
 
   const actions = el("div", "actions");
   actions.append(
+    actionBtn("Saved", openLibrary),
     actionBtn("Copy", onCopy),
     actionBtn("Export", onExport),
     actionBtn("Save", onSave),
@@ -200,27 +399,9 @@ function controlBar(): HTMLElement {
   return bar;
 }
 
-function section(
-  title: string,
-  key: "ingredients" | "steps",
-  count: string,
-  body: HTMLElement,
-): HTMLElement {
-  const wrap = el("div", "section");
-  const head = el("div", "section-head");
-  if (collapsed[key]) head.classList.add("collapsed");
-  head.append(
-    textEl("span", "▾", "caret"),
-    textEl("h2", title),
-    textEl("span", count, "count"),
-  );
-  head.addEventListener("click", () => {
-    collapsed[key] = !collapsed[key];
-    renderCard();
-  });
-  wrap.appendChild(head);
-  if (!collapsed[key]) wrap.appendChild(body);
-  return wrap;
+function openLibrary(): void {
+  libraryOpen = true;
+  renderRoot();
 }
 
 function ingredientsBody(r: Recipe): HTMLElement {
@@ -242,7 +423,8 @@ function ingredientsBody(r: Recipe): HTMLElement {
       const check = textEl("span", "✓", "check");
       check.addEventListener("click", () => toggleCheck(row, check, checkedIngredients, i));
       const text = el("span", "text");
-      const qty = [scaleAmount(ing.amount, scale), ing.unit].filter(Boolean).join(" ");
+      const m = convertMeasure(ing.amount, ing.unit, units, scale);
+      const qty = [m.amount, m.unit].filter(Boolean).join(" ");
       if (qty) text.appendChild(textEl("span", qty + " ", "amount"));
       text.appendChild(document.createTextNode(ing.name));
       if (ing.uncertain) text.appendChild(textEl("span", "approx", "tag"));
@@ -253,8 +435,8 @@ function ingredientsBody(r: Recipe): HTMLElement {
 
   if (editMode) {
     wrap.appendChild(addRow("+ ingredient", () => {
+      readDomIntoRecipe(); // capture current edits first
       recipe?.ingredients.push({ name: "", amount: null, unit: null, uncertain: false });
-      readDomIntoRecipe();
       renderCard();
     }));
   }
@@ -291,8 +473,8 @@ function stepsBody(r: Recipe): HTMLElement {
 
   if (editMode) {
     wrap.appendChild(addRow("+ step", () => {
+      readDomIntoRecipe(); // capture current edits first
       recipe?.steps.push({ instruction: "", timestamp: null });
-      readDomIntoRecipe();
       renderCard();
     }));
   }
@@ -367,51 +549,65 @@ async function onSave(): Promise<void> {
   setStatus("Saved.");
 }
 
-/** The recipe as currently shown: edits captured, scaling applied. */
+/** The recipe as currently shown: edits captured, scaling + units applied. */
 function effectiveRecipe(): Recipe {
   if (editMode) readDomIntoRecipe();
   const base = recipe!;
   return {
     ...base,
     servings: scaleServings(base.servings, scale),
-    ingredients: base.ingredients.map((ing) => ({
-      ...ing,
-      amount: scaleAmount(ing.amount, scale),
-    })),
+    ingredients: base.ingredients.map((ing) => {
+      const m = convertMeasure(ing.amount, ing.unit, units, scale);
+      return { ...ing, amount: m.amount, unit: m.unit };
+    }),
   };
 }
 
 // --- read edited DOM back into `recipe` ------------------------------------
 
+// Only the active tab's fields are in the DOM at once, so we merge in just what
+// is present and leave the rest of `recipe` intact. Header fields (title,
+// servings, time) are always present in edit mode.
 function readDomIntoRecipe(): void {
   if (!recipe) return;
+  const updated: Recipe = { ...recipe };
 
-  const ingredients = Array.from(app.querySelectorAll<HTMLElement>(".ing-edit"))
-    .map((edit) => ({
-      amount: readText(edit.querySelector(".ing-amount")) || null,
-      unit: readText(edit.querySelector(".ing-unit")) || null,
-      name: readText(edit.querySelector(".ing-name")),
-      uncertain: !!edit.parentElement?.querySelector(".uncertain.on"),
-    }))
-    .filter((i) => i.name !== "");
+  const titleEl = app.querySelector(".r-title");
+  if (titleEl) updated.title = readText(titleEl) || recipe.title;
+  const servEl = app.querySelector(".r-servings");
+  if (servEl) updated.servings = readText(servEl) || null;
+  const timeEl = app.querySelector(".r-totaltime");
+  if (timeEl) updated.totalTime = readText(timeEl) || null;
 
-  const steps = Array.from(app.querySelectorAll<HTMLElement>(".row"))
-    .filter((row) => row.querySelector(".step-text"))
-    .map((row) => ({
-      instruction: readText(row.querySelector(".step-text")),
-      timestamp: row.dataset.ts !== undefined ? Number(row.dataset.ts) : null,
-    }))
-    .filter((s) => s.instruction !== "");
+  if (activeTab === "ingredients") {
+    updated.ingredients = Array.from(app.querySelectorAll<HTMLElement>(".ing-edit"))
+      .map((edit) => ({
+        amount: readText(edit.querySelector(".ing-amount")) || null,
+        unit: readText(edit.querySelector(".ing-unit")) || null,
+        name: readText(edit.querySelector(".ing-name")),
+        uncertain: !!edit.parentElement?.querySelector(".uncertain.on"),
+      }))
+      .filter((i) => i.name !== "");
+  }
 
-  recipe = {
-    ...recipe,
-    title: readText(app.querySelector(".r-title")) || recipe.title,
-    servings: readText(app.querySelector(".r-servings")) || null,
-    totalTime: readText(app.querySelector(".r-totaltime")) || null,
-    notes: readText(app.querySelector(".r-notes")) || null,
-    ingredients: ingredients.length ? ingredients : recipe.ingredients,
-    steps: steps.length ? steps : recipe.steps,
-  };
+  if (activeTab === "steps") {
+    updated.steps = Array.from(app.querySelectorAll<HTMLElement>(".row"))
+      .filter((row) => row.querySelector(".step-text"))
+      .map((row) => ({
+        instruction: readText(row.querySelector(".step-text")),
+        timestamp: row.dataset.ts !== undefined ? Number(row.dataset.ts) : null,
+      }))
+      .filter((s) => s.instruction !== "");
+  }
+
+  if (activeTab === "overview") {
+    const sumEl = app.querySelector(".r-summary");
+    if (sumEl) updated.summary = readText(sumEl) || null;
+    const notesEl = app.querySelector(".r-notes");
+    if (notesEl) updated.notes = readText(notesEl) || null;
+  }
+
+  recipe = updated;
 }
 
 // --- small DOM helpers -----------------------------------------------------

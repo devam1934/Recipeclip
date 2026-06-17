@@ -6,6 +6,9 @@
 /** How confident the model is that the extracted recipe is accurate. */
 export type SourceConfidence = "high" | "medium" | "low";
 
+/** Rough effort level for the recipe. */
+export type Difficulty = "easy" | "medium" | "hard";
+
 export interface Ingredient {
   name: string;
   /** Quantity as a string ("1 1/2", "2"), or null when unknown. */
@@ -32,6 +35,17 @@ export interface Recipe {
   sourceConfidence: SourceConfidence;
   /** False when the video does not appear to be a recipe. */
   isRecipe: boolean;
+
+  // --- "free" extras filled in by the same extraction call ---
+  /** One- or two-sentence TL;DR of the dish. */
+  summary: string | null;
+  /** Dietary tags, e.g. ["vegan", "gluten-free"]. */
+  dietaryTags: string[];
+  difficulty: Difficulty | null;
+  /** Cuisine, e.g. "Italian". */
+  cuisine: string | null;
+  /** Tools/equipment needed, e.g. ["whisk", "9x13 pan"]. */
+  equipment: string[];
 }
 
 /** One timestamped line of transcript. */
