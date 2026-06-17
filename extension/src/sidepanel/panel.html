@@ -4,6 +4,111 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>RecipeClip</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #0f0f0f;
+        --muted: #606060;
+        --line: #e5e5e5;
+        --accent: #ff5722;
+        --warn: #b26a00;
+        --warn-bg: #fff4e0;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.5 Roboto, Arial, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      #app { padding: 16px; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        margin: 20px 0 8px;
+      }
+      .meta { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+      .badge {
+        display: inline-block;
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: #f0f0f0;
+        color: var(--muted);
+      }
+      .badge.high { background: #e6f4ea; color: #137333; }
+      .badge.medium { background: #fef7e0; color: #a36a00; }
+      .badge.low { background: #fce8e6; color: #c5221f; }
+      ul.ingredients { list-style: none; padding: 0; margin: 0; }
+      ul.ingredients li {
+        padding: 6px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .amount { font-weight: 600; }
+      .uncertain {
+        margin-left: 6px;
+        font-size: 11px;
+        color: var(--warn);
+        background: var(--warn-bg);
+        padding: 1px 6px;
+        border-radius: 8px;
+      }
+      ol.steps { padding-left: 20px; margin: 0; }
+      ol.steps li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+      .ts {
+        display: inline-block;
+        margin-left: 8px;
+        font-variant-numeric: tabular-nums;
+        color: var(--accent);
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .ts:hover { text-decoration: underline; }
+      .notes {
+        margin-top: 16px;
+        padding: 12px;
+        background: #f8f8f8;
+        border-radius: 8px;
+        color: var(--muted);
+      }
+      .state {
+        text-align: center;
+        color: var(--muted);
+        padding: 48px 16px;
+      }
+      .spinner {
+        width: 24px; height: 24px;
+        margin: 0 auto 12px;
+        border: 3px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .toolbar { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+      button.action {
+        font: 500 13px Roboto, Arial, sans-serif;
+        padding: 8px 12px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: #fff;
+        cursor: pointer;
+      }
+      button.action:hover { background: #f5f5f5; }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f0f0f; --fg: #f1f1f1; --muted: #aaa; --line: #303030;
+          --warn-bg: #3a2e12;
+        }
+        .notes { background: #1c1c1c; }
+        .badge { background: #272727; }
+        button.action { background: #1c1c1c; color: var(--fg); }
+        button.action:hover { background: #272727; }
+      }
+    </style>
   </head>
   <body>
     <main id="app"></main>

@@ -18,3 +18,9 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
   `RecipeExtractor` interface. Handler validates input, detects non-recipe
   videos, and returns typed success/error JSON. Model output is normalized into
   a guaranteed-valid Recipe.
+- Side-panel UI: content script injects a "Get recipe" button, service worker
+  owns panel state + is the sole backend caller, and the panel renders
+  loading / error / recipe views. Recipe card shows ingredients (with uncertain
+  flags), numbered steps with clickable timestamps that seek the in-page video,
+  a confidence badge, and notes. Typed message protocol across all three
+  contexts; SPA-safe button re-injection.
