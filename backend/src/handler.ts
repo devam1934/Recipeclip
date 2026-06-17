@@ -3,8 +3,9 @@
 
 import { AnthropicExtractor } from "./llm/anthropic";
 import { LlmError } from "./llm/provider";
+import { cacheRecipe, getCachedRecipe } from "./cache";
 import { parseExtractRequest } from "./extract";
-import type { Env, ExtractErrorCode, ExtractResponse } from "./types";
+import type { Env, ExtractErrorCode, ExtractResponse, Recipe } from "./types";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -40,19 +41,17 @@ export default {
     }
 
     try {
+      // Cache hit: skip the LLM entirely.
+      const cached = await getCachedRecipe(env, req.videoId);
+      if (cached) return respondWith(cached, true);
+
       const extractor = new AnthropicExtractor(env.ANTHROPIC_API_KEY);
       const recipe = await extractor.extract(req);
 
-      if (!recipe.isRecipe) {
-        return fail(
-          "not_a_recipe",
-          recipe.notes ?? "This video does not appear to be a recipe.",
-          200,
-        );
-      }
-
-      const payload: ExtractResponse = { ok: true, recipe, cached: false };
-      return json(payload, 200);
+      // Cache the result (recipe or non-recipe) so we only call the LLM once
+      // per video.
+      await cacheRecipe(env, req.videoId, recipe);
+      return respondWith(recipe, false);
     } catch (err) {
       if (err instanceof LlmError) {
         return fail("llm_error", err.message, 502);
@@ -61,6 +60,19 @@ export default {
     }
   },
 };
+
+/** Turn a recipe (fresh or cached) into the right success/non-recipe response. */
+function respondWith(recipe: Recipe, cached: boolean): Response {
+  if (!recipe.isRecipe) {
+    return fail(
+      "not_a_recipe",
+      recipe.notes ?? "This video does not appear to be a recipe.",
+      200,
+    );
+  }
+  const payload: ExtractResponse = { ok: true, recipe, cached };
+  return json(payload, 200);
+}
 
 function json(payload: unknown, status: number): Response {
   return new Response(JSON.stringify(payload), {

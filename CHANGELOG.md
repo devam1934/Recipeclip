@@ -29,3 +29,6 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
   Markdown to the clipboard, downloads a `.md` file, and saves to
   `chrome.storage.local` (keyed by video id). The edited DOM is read back into a
   Recipe on demand (`readRecipeFromDom`).
+- Backend caching: results are cached in Workers KV by video id (best-effort,
+  with TTL), so each video costs at most one LLM call. Cache hits are flagged
+  `cached: true` in the response.
