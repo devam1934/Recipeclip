@@ -76,7 +76,22 @@ export async function gatherVideoData(): Promise<ExtractRequest> {
   const description = player?.videoDetails?.shortDescription ?? "";
 
   const segments = await getTranscript(player);
-  if (segments.length === 0) throw new NoTranscriptError();
+
+  console.info("[RecipeClip] gathered", {
+    videoId,
+    title,
+    descriptionChars: description.length,
+    segments: segments.length,
+  });
+
+  // Graceful degradation: a missing transcript is fine as long as we have a
+  // description to work from (many cooking videos put the full recipe there).
+  // Only give up when we have neither.
+  if (segments.length === 0 && description.trim() === "") {
+    throw new NoTranscriptError(
+      "This video has no transcript or description to read a recipe from.",
+    );
+  }
 
   return { videoId, title, description, segments };
 }
@@ -169,18 +184,24 @@ function sliceBalancedJson(text: string, start: number): string | null {
 async function getTranscript(
   player: PlayerResponse | null,
 ): Promise<TranscriptSegment[]> {
-  const track = pickCaptionTrack(
-    player?.captions?.playerCaptionsTracklistRenderer?.captionTracks,
-  );
+  const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  console.debug("[RecipeClip] caption tracks available:", tracks?.length ?? 0);
+
+  const track = pickCaptionTrack(tracks);
   if (track) {
     try {
       const segments = await fetchCaptionTrack(track.baseUrl);
+      console.debug("[RecipeClip] json3 caption segments:", segments.length);
       if (segments.length > 0) return segments;
-    } catch {
-      // fall through to the panel scrape
+    } catch (err) {
+      console.debug("[RecipeClip] caption fetch failed, will scrape panel:", err);
     }
   }
-  return scrapeTranscriptPanel();
+
+  console.debug("[RecipeClip] falling back to transcript-panel scrape");
+  const scraped = await scrapeTranscriptPanel();
+  console.debug("[RecipeClip] transcript-panel segments:", scraped.length);
+  return scraped;
 }
 
 /** Prefer a manual English track, then auto English, then anything. */
@@ -206,7 +227,16 @@ async function fetchCaptionTrack(
   const res = await fetch(url.toString(), { credentials: "include" });
   if (!res.ok) throw new Error(`caption fetch failed: ${res.status}`);
 
-  const data = (await res.json()) as { events?: Json3Event[] };
+  // YouTube increasingly returns an empty body here (the endpoint now wants a
+  // token). Read text first and treat empty as "no captions this way" rather
+  // than letting JSON.parse throw a noisy SyntaxError.
+  const raw = await res.text();
+  if (!raw.trim()) {
+    console.debug("[RecipeClip] caption endpoint returned an empty body");
+    return [];
+  }
+
+  const data = JSON.parse(raw) as { events?: Json3Event[] };
   const segments: TranscriptSegment[] = [];
   for (const event of data.events ?? []) {
     const text = (event.segs ?? [])
@@ -248,13 +278,22 @@ async function scrapeTranscriptPanel(): Promise<TranscriptSegment[]> {
 async function openTranscriptPanel(): Promise<void> {
   if (document.querySelector("ytd-transcript-segment-renderer")) return;
 
-  const button = findButtonByText([
-    "show transcript",
-    "transcript",
-  ]);
-  button?.click();
-  // Give YouTube a beat to render the panel before the caller polls for rows.
+  // The "Show transcript" button lives inside the description, which is
+  // collapsed by default — expand it first so the button is in the DOM.
+  const expand = document.querySelector<HTMLElement>(
+    "tp-yt-paper-button#expand, #expand, #description #expand",
+  );
+  expand?.click();
   await delay(300);
+
+  const button = findButtonByText(["show transcript", "transcript"]);
+  if (!button) {
+    console.warn("[RecipeClip] could not find a 'Show transcript' button");
+    return;
+  }
+  button.click();
+  // Give YouTube a beat to render the panel before the caller polls for rows.
+  await delay(500);
 }
 
 /** Find a clickable element whose visible text/aria-label matches a phrase. */

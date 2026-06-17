@@ -70,6 +70,9 @@ export class GeminiExtractor implements RecipeExtractor {
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: RECIPE_SCHEMA,
+        // Extraction doesn't need extended reasoning; disabling "thinking"
+        // makes 2.5 Flash much faster (and cheaper).
+        thinkingConfig: { thinkingBudget: 0 },
       },
     };
 

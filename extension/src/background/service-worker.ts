@@ -51,12 +51,16 @@ function openPanel(tab?: chrome.tabs.Tab): void {
   });
 }
 
+const REQUEST_TIMEOUT_MS = 45000;
+
 async function runExtraction(request: ExtractRequest): Promise<void> {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(BACKEND_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
+      signal: timeout,
     });
 
     const data = (await res.json()) as ExtractResponse;
@@ -71,11 +75,14 @@ async function runExtraction(request: ExtractRequest): Promise<void> {
     } else {
       setState({ status: "error", code: data.error, message: data.message });
     }
-  } catch {
+  } catch (err) {
+    const timedOut = err instanceof DOMException && err.name === "TimeoutError";
     setState({
       status: "error",
       code: "internal_error",
-      message: "Couldn't reach the RecipeClip backend. Is it running?",
+      message: timedOut
+        ? "The backend took too long to respond. Try again."
+        : "Couldn't reach the RecipeClip backend. Is it running?",
     });
   }
 }

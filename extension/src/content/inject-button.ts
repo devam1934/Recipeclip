@@ -71,24 +71,49 @@ async function onClick(event: Event): Promise<void> {
   }
 }
 
-/** Insert the button near the video title, if it isn't already present. */
-function injectButton(): void {
-  if (document.getElementById(BUTTON_ID)) return;
-  // Anchor next to the title block; fall back to a floating button.
-  const anchor =
-    document.querySelector("ytd-watch-metadata #title") ??
-    document.querySelector("#above-the-fold #title");
-  const button = createButton();
+/** The title block we'd like to sit next to (may not exist yet on load). */
+function findTitleAnchor(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    "ytd-watch-metadata #title, #above-the-fold #title",
+  );
+}
 
-  if (anchor) {
-    anchor.parentElement?.insertBefore(button, anchor);
-  } else {
-    button.style.position = "fixed";
-    button.style.bottom = "16px";
-    button.style.right = "16px";
-    button.style.zIndex = "9999";
-    document.body.appendChild(button);
+function placeNearTitle(button: HTMLElement, anchor: HTMLElement): void {
+  button.dataset.placement = "title";
+  button.style.position = "";
+  button.style.bottom = "";
+  button.style.right = "";
+  anchor.appendChild(button);
+}
+
+function placeFloating(button: HTMLElement): void {
+  button.dataset.placement = "float";
+  button.style.position = "fixed";
+  button.style.bottom = "16px";
+  button.style.right = "16px";
+  button.style.zIndex = "9999";
+  document.body.appendChild(button);
+}
+
+/**
+ * Insert the button near the title when possible, otherwise float it. Because
+ * the title block often renders after the content script runs, a button that
+ * started floating is moved up to the title once it appears.
+ */
+function injectButton(): void {
+  const existing = document.getElementById(BUTTON_ID);
+  const anchor = findTitleAnchor();
+
+  if (existing) {
+    if (anchor && existing.dataset.placement === "float") {
+      placeNearTitle(existing, anchor);
+    }
+    return;
   }
+
+  const button = createButton();
+  if (anchor) placeNearTitle(button, anchor);
+  else placeFloating(button);
 }
 
 /** Seek the page's video element to a given second. */

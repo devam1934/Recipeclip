@@ -36,8 +36,10 @@ export default {
     if (!req) {
       return fail("bad_request", "Missing or malformed fields.", 400);
     }
-    if (req.segments.length === 0) {
-      return fail("no_transcript", "No transcript was provided.", 422);
+    // A missing transcript is OK as long as there's a description to read the
+    // recipe from. Only reject when we have neither.
+    if (req.segments.length === 0 && req.description.trim() === "") {
+      return fail("no_transcript", "No transcript or description to read.", 422);
     }
 
     try {
