@@ -12,5 +12,7 @@ binding = "RECIPE_CACHE"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
 [vars]
-# Non-secret config. The API key is NOT here — it is a secret (see README).
+# Non-secret config. API keys are NOT here — they are secrets (see README).
+# Which LLM to use: "gemini" (free tier) or "anthropic".
+LLM_PROVIDER = "gemini"
 CACHE_TTL_SECONDS = "2592000"

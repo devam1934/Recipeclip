@@ -51,7 +51,12 @@ export type ExtractResponse =
 
 /** Bindings configured in wrangler.toml + secrets. */
 export interface Env {
-  ANTHROPIC_API_KEY: string;
+  /** "gemini" (default) or "anthropic". */
+  LLM_PROVIDER?: string;
+  /** Required when LLM_PROVIDER=gemini. */
+  GEMINI_API_KEY?: string;
+  /** Required when LLM_PROVIDER=anthropic. */
+  ANTHROPIC_API_KEY?: string;
   RECIPE_CACHE: KVNamespace;
   CACHE_TTL_SECONDS: string;
 }

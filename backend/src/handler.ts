@@ -1,7 +1,7 @@
 // Worker entry. Pipeline: validate request -> extract via the LLM -> respond.
 // (KV caching by video id is layered in by a later phase.)
 
-import { AnthropicExtractor } from "./llm/anthropic";
+import { createExtractor } from "./llm";
 import { LlmError } from "./llm/provider";
 import { cacheRecipe, getCachedRecipe } from "./cache";
 import { parseExtractRequest } from "./extract";
@@ -45,7 +45,7 @@ export default {
       const cached = await getCachedRecipe(env, req.videoId);
       if (cached) return respondWith(cached, true);
 
-      const extractor = new AnthropicExtractor(env.ANTHROPIC_API_KEY);
+      const extractor = createExtractor(env);
       const recipe = await extractor.extract(req);
 
       // Cache the result (recipe or non-recipe) so we only call the LLM once

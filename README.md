@@ -18,9 +18,10 @@ Three cleanly separated parts:
    holds the LLM key, receives the gathered text, calls the LLM with structured
    output, returns recipe JSON, and caches results by video id in Workers KV.
 
-3. **LLM** — Anthropic Claude, called with structured output (tool use). The
-   provider sits behind a small interface (`backend/src/llm/provider.ts`) so it
-   can be swapped.
+3. **LLM** — called with structured output. Defaults to **Google Gemini**
+   (free tier); **Anthropic Claude** is also supported. The provider sits behind
+   a small interface (`backend/src/llm/provider.ts`) and is selected by the
+   `LLM_PROVIDER` env var, so switching is a one-line config change.
 
 ```
 extension/                 Chrome MV3 client (no API key)
@@ -43,6 +44,9 @@ YouTube changes its page internals without warning. All of the brittle bits
 fetch, and the "Show transcript" panel scrape fallback) live in **one** module,
 `extension/src/youtube/transcript.ts`, so they can be patched in isolation when
 YouTube breaks.
+
+> **New to the code?** [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md) explains
+> every source file and the end-to-end request flow, line by line.
 
 ## Data flow
 
@@ -80,12 +84,16 @@ Requires Node 18+ and a Cloudflare account for `wrangler` (free tier is fine).
 ```bash
 cd backend
 npm install
-cp .env.example .dev.vars      # then put your real ANTHROPIC_API_KEY in .dev.vars
+cp .env.example .dev.vars      # then put your real GEMINI_API_KEY in .dev.vars
 npm run dev                    # wrangler dev -> http://localhost:8787
 ```
 
-`.dev.vars` is how Wrangler injects secrets locally; it is gitignored. For
-deploys, set the secret with `npx wrangler secret put ANTHROPIC_API_KEY`.
+Get a free Gemini key at https://aistudio.google.com/apikey. `.dev.vars` is how
+Wrangler injects secrets locally; it is gitignored. For deploys, set the secret
+with `npx wrangler secret put GEMINI_API_KEY`.
+
+To use Claude instead, set `LLM_PROVIDER = "anthropic"` in `wrangler.toml` and
+provide `ANTHROPIC_API_KEY`.
 
 ## Loading the extension
 
@@ -104,11 +112,13 @@ By default the extension points at `http://localhost:8787`. See
 
 ## Required env vars
 
-| Var                 | Where        | Purpose                          |
-| ------------------- | ------------ | -------------------------------- |
-| `ANTHROPIC_API_KEY` | backend only | Auth for the Claude API.         |
+| Var                 | Where        | Purpose                                          |
+| ------------------- | ------------ | ------------------------------------------------ |
+| `LLM_PROVIDER`      | backend      | `gemini` (default) or `anthropic`. In `wrangler.toml`. |
+| `GEMINI_API_KEY`    | backend only | Auth for the Gemini API (when provider=gemini).  |
+| `ANTHROPIC_API_KEY` | backend only | Auth for the Claude API (when provider=anthropic). |
 
-The key lives only in the backend. The extension never sees it.
+Keys live only in the backend. The extension never sees them.
 
 ## Scope
 

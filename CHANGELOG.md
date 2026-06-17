@@ -32,6 +32,10 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
 - Backend caching: results are cached in Workers KV by video id (best-effort,
   with TTL), so each video costs at most one LLM call. Cache hits are flagged
   `cached: true` in the response.
+- Google Gemini provider (`llm/gemini.ts`) using native JSON-schema structured
+  output, now the default. Provider factory (`llm/index.ts`) selects between
+  Gemini and Anthropic via the `LLM_PROVIDER` env var; Claude path unchanged.
+  README + walkthrough updated for the free-tier setup.
 - Polish: README "known limitations" + "failure handling" sections; verified
   pure logic (request validation, recipe normalization, prompt building,
   Markdown export) with passing unit checks; both halves typecheck and the
