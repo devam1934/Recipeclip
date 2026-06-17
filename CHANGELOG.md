@@ -13,3 +13,8 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
   description / caption tracks, fetches the timestamped transcript via
   `fmt=json3`, with a "Show transcript" panel scrape fallback. Typed failure
   signals for non-video and no-transcript pages.
+- Backend extraction pipeline: request validation, fusion-rule prompt, and
+  Claude integration via tool-use structured output behind a swappable
+  `RecipeExtractor` interface. Handler validates input, detects non-recipe
+  videos, and returns typed success/error JSON. Model output is normalized into
+  a guaranteed-valid Recipe.
