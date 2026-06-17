@@ -98,6 +98,28 @@
         cursor: pointer;
       }
       button.action:hover { background: #f5f5f5; }
+      button.action.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+      [contenteditable] { outline: none; border-radius: 4px; }
+      [contenteditable]:focus { box-shadow: 0 0 0 2px var(--accent); }
+      [contenteditable]:empty::before {
+        content: attr(data-placeholder);
+        color: #bbb;
+      }
+      h1[contenteditable] { display: block; }
+      .ing-row, .step-row { display: flex; align-items: baseline; gap: 6px; }
+      .ing-name, .step-text { flex: 1; }
+      .ing-amount { min-width: 24px; }
+      .row-remove {
+        border: none; background: none; color: #bbb;
+        cursor: pointer; font-size: 14px; padding: 0 4px;
+      }
+      .row-remove:hover { color: var(--accent); }
+      .add-row {
+        margin-top: 8px; border: none; background: none;
+        color: var(--accent); cursor: pointer; font-size: 13px; padding: 4px 0;
+      }
+      .uncertain { cursor: pointer; user-select: none; }
+      .status { color: var(--muted); font-size: 12px; margin-top: 8px; min-height: 16px; }
       @media (prefers-color-scheme: dark) {
         :root {
           --bg: #0f0f0f; --fg: #f1f1f1; --muted: #aaa; --line: #303030;

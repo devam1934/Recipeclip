@@ -24,3 +24,8 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
   flags), numbered steps with clickable timestamps that seek the in-page video,
   a confidence badge, and notes. Typed message protocol across all three
   contexts; SPA-safe button re-injection.
+- Editing + export + save: every card field is editable in place, ingredient
+  and step rows can be added/removed, uncertain amounts toggle. Toolbar copies
+  Markdown to the clipboard, downloads a `.md` file, and saves to
+  `chrome.storage.local` (keyed by video id). The edited DOM is read back into a
+  Recipe on demand (`readRecipeFromDom`).

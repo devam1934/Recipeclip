@@ -1,13 +1,20 @@
 // Side panel renderer. Subscribes to state owned by the service worker and
-// draws the matching view: loading, error, or the recipe card. Editing, export,
-// and saving are layered on in a later phase.
+// draws the matching view. The recipe card is editable in place: fields are
+// contentEditable and rows can be added/removed. On copy/export/save we read
+// the live DOM back into a Recipe (readRecipeFromDom), so we never have to sync
+// on every keystroke.
 
 import { isMessage, type Message, type PanelState } from "../shared/messages";
-import type { Recipe } from "../shared/types";
+import type { Recipe, SourceConfidence } from "../shared/types";
+import { formatTimestamp, toMarkdown } from "./export";
+import { saveRecipe } from "./storage";
 
 const app = document.getElementById("app")!;
 
-// --- bootstrap: get current state, then listen for updates ----------------
+// The video the current card belongs to — needed for deep-links and saving.
+let currentVideoId: string | null = null;
+
+// --- bootstrap -------------------------------------------------------------
 
 chrome.runtime.sendMessage({ type: "GET_STATE" } satisfies Message).then(
   (state: PanelState | undefined) => render(state ?? { status: "idle" }),
@@ -18,7 +25,7 @@ chrome.runtime.onMessage.addListener((raw) => {
   if (isMessage(raw) && raw.type === "STATE_UPDATE") render(raw.state);
 });
 
-// --- rendering -------------------------------------------------------------
+// --- top-level rendering ---------------------------------------------------
 
 function render(state: PanelState): void {
   app.replaceChildren(viewFor(state));
@@ -33,7 +40,8 @@ function viewFor(state: PanelState): Node {
     case "error":
       return message(state.message, "😕");
     case "ready":
-      return recipeCard(state.recipe, state.videoId);
+      currentVideoId = state.videoId;
+      return recipeCard(state.recipe);
   }
 }
 
@@ -51,59 +59,104 @@ function message(msg: string, icon = "🍳"): Node {
   return wrap;
 }
 
-function recipeCard(recipe: Recipe, videoId: string): Node {
+// --- editable recipe card --------------------------------------------------
+
+function recipeCard(recipe: Recipe): Node {
   const frag = document.createDocumentFragment();
 
-  frag.appendChild(text("h1", recipe.title));
+  frag.appendChild(editable("h1", recipe.title, "r-title", "Recipe title"));
 
-  const meta: string[] = [];
-  if (recipe.servings) meta.push(`Serves ${recipe.servings}`);
-  if (recipe.totalTime) meta.push(recipe.totalTime);
-  if (meta.length) frag.appendChild(text("div", meta.join(" · "), "meta"));
+  const meta = div("meta");
+  meta.append(
+    document.createTextNode("Serves "),
+    editable("span", recipe.servings ?? "", "r-servings", "?"),
+    document.createTextNode(" · "),
+    editable("span", recipe.totalTime ?? "", "r-totaltime", "total time"),
+  );
+  frag.appendChild(meta);
 
-  const badge = text("span", confidenceLabel(recipe.sourceConfidence), "badge");
+  const badge = text("span", `${recipe.sourceConfidence} confidence`, "badge");
   badge.classList.add(recipe.sourceConfidence);
+  badge.dataset.confidence = recipe.sourceConfidence;
   frag.appendChild(badge);
 
   // Ingredients
   frag.appendChild(text("h2", "Ingredients"));
   const ul = document.createElement("ul");
   ul.className = "ingredients";
-  for (const ing of recipe.ingredients) {
-    const li = document.createElement("li");
-    const qty = [ing.amount, ing.unit].filter(Boolean).join(" ");
-    if (qty) li.appendChild(text("span", qty + " ", "amount"));
-    li.appendChild(document.createTextNode(ing.name));
-    if (ing.uncertain) li.appendChild(text("span", "approx", "uncertain"));
-    ul.appendChild(li);
-  }
+  ul.id = "ingredient-list";
+  recipe.ingredients.forEach((ing) => ul.appendChild(ingredientRow(ing)));
   frag.appendChild(ul);
+  frag.appendChild(
+    addRowButton("+ ingredient", () =>
+      ul.appendChild(ingredientRow({ name: "", amount: null, unit: null, uncertain: false })),
+    ),
+  );
 
   // Steps
   frag.appendChild(text("h2", "Steps"));
   const ol = document.createElement("ol");
   ol.className = "steps";
-  for (const step of recipe.steps) {
-    const li = document.createElement("li");
-    li.appendChild(document.createTextNode(step.instruction));
-    if (step.timestamp !== null) {
-      li.appendChild(timestampLink(step.timestamp, videoId));
-    }
-    ol.appendChild(li);
-  }
+  ol.id = "step-list";
+  recipe.steps.forEach((step) => ol.appendChild(stepRow(step.instruction, step.timestamp)));
   frag.appendChild(ol);
+  frag.appendChild(
+    addRowButton("+ step", () => ol.appendChild(stepRow("", null))),
+  );
 
-  if (recipe.notes) frag.appendChild(text("div", recipe.notes, "notes"));
+  // Notes
+  frag.appendChild(text("h2", "Notes"));
+  frag.appendChild(editable("div", recipe.notes ?? "", "r-notes notes", "Add notes…"));
+
+  frag.appendChild(toolbar());
+  frag.appendChild(text("div", "", "status"));
 
   return frag;
 }
 
-/** Clickable timestamp: seeks the in-page video, with a normal link fallback. */
-function timestampLink(seconds: number, videoId: string): HTMLElement {
+function ingredientRow(ing: Recipe["ingredients"][number]): HTMLElement {
+  const li = document.createElement("li");
+  li.className = "ing-row";
+  li.append(
+    editable("span", ing.amount ?? "", "ing-amount", "qty"),
+    editable("span", ing.unit ?? "", "ing-unit", "unit"),
+    editable("span", ing.name, "ing-name", "ingredient"),
+    uncertainToggle(ing.uncertain),
+    removeButton(li),
+  );
+  return li;
+}
+
+function stepRow(instruction: string, timestamp: number | null): HTMLElement {
+  const li = document.createElement("li");
+  li.className = "step-row";
+  if (timestamp !== null) li.dataset.ts = String(timestamp);
+  li.append(editable("span", instruction, "step-text", "step…"));
+  if (timestamp !== null) li.append(timestampLink(timestamp));
+  li.append(removeButton(li));
+  return li;
+}
+
+/** A toggle chip; presence of the `.on` class is read back as `uncertain`. */
+function uncertainToggle(on: boolean): HTMLElement {
+  const chip = text("span", "approx", "uncertain");
+  chip.title = "Toggle uncertain amount";
+  chip.style.opacity = on ? "1" : "0.4";
+  if (on) chip.classList.add("on");
+  chip.addEventListener("click", () => {
+    const nowOn = chip.classList.toggle("on");
+    chip.style.opacity = nowOn ? "1" : "0.4";
+  });
+  return chip;
+}
+
+function timestampLink(seconds: number): HTMLElement {
   const link = document.createElement("a");
   link.className = "ts";
   link.textContent = formatTimestamp(seconds);
-  link.href = `https://www.youtube.com/watch?v=${videoId}&t=${seconds}s`;
+  if (currentVideoId) {
+    link.href = `https://www.youtube.com/watch?v=${currentVideoId}&t=${seconds}s`;
+  }
   link.target = "_blank";
   link.rel = "noopener";
   link.addEventListener("click", (e) => {
@@ -113,19 +166,129 @@ function timestampLink(seconds: number, videoId: string): HTMLElement {
   return link;
 }
 
-// --- small helpers ---------------------------------------------------------
-
-function confidenceLabel(c: Recipe["sourceConfidence"]): string {
-  return `${c} confidence`;
+function toolbar(): HTMLElement {
+  const bar = div("toolbar");
+  bar.append(
+    actionButton("Copy", onCopy),
+    actionButton("Export .md", onExport),
+    actionButton("Save", onSave, true),
+  );
+  return bar;
 }
 
-function formatTimestamp(totalSeconds: number): string {
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
-  const ss = String(s).padStart(2, "0");
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+// --- toolbar actions -------------------------------------------------------
+
+async function onCopy(): Promise<void> {
+  await navigator.clipboard.writeText(toMarkdown(readRecipeFromDom()));
+  setStatus("Copied to clipboard.");
+}
+
+function onExport(): void {
+  const recipe = readRecipeFromDom();
+  const blob = new Blob([toMarkdown(recipe)], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${slugify(recipe.title) || "recipe"}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+  setStatus("Markdown downloaded.");
+}
+
+async function onSave(): Promise<void> {
+  if (!currentVideoId) return;
+  await saveRecipe(currentVideoId, readRecipeFromDom());
+  setStatus("Saved.");
+}
+
+// --- read the edited DOM back into a Recipe --------------------------------
+
+function readRecipeFromDom(): Recipe {
+  const ingredients = Array.from(
+    document.querySelectorAll<HTMLElement>("#ingredient-list .ing-row"),
+  )
+    .map((row) => ({
+      amount: readText(row.querySelector(".ing-amount")) || null,
+      unit: readText(row.querySelector(".ing-unit")) || null,
+      name: readText(row.querySelector(".ing-name")),
+      uncertain: !!row.querySelector(".uncertain.on"),
+    }))
+    .filter((i) => i.name !== "");
+
+  const steps = Array.from(
+    document.querySelectorAll<HTMLElement>("#step-list .step-row"),
+  )
+    .map((row) => ({
+      instruction: readText(row.querySelector(".step-text")),
+      timestamp: row.dataset.ts !== undefined ? Number(row.dataset.ts) : null,
+    }))
+    .filter((s) => s.instruction !== "");
+
+  const badge = document.querySelector<HTMLElement>(".badge");
+
+  return {
+    title: readText(document.querySelector(".r-title")) || "Untitled recipe",
+    servings: readText(document.querySelector(".r-servings")) || null,
+    totalTime: readText(document.querySelector(".r-totaltime")) || null,
+    ingredients,
+    steps,
+    notes: readText(document.querySelector(".r-notes")) || null,
+    sourceConfidence: (badge?.dataset.confidence as SourceConfidence) ?? "low",
+    isRecipe: true,
+  };
+}
+
+// --- small DOM helpers -----------------------------------------------------
+
+function editable(
+  tag: string,
+  content: string,
+  className: string,
+  placeholder: string,
+): HTMLElement {
+  const el = document.createElement(tag);
+  el.className = className;
+  el.textContent = content;
+  el.contentEditable = "true";
+  el.dataset.placeholder = placeholder;
+  return el;
+}
+
+function addRowButton(label: string, onClick: () => void): HTMLElement {
+  const btn = text("button", label, "add-row");
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function removeButton(row: HTMLElement): HTMLElement {
+  const btn = text("button", "✕", "row-remove");
+  btn.title = "Remove";
+  btn.addEventListener("click", () => row.remove());
+  return btn;
+}
+
+function actionButton(
+  label: string,
+  onClick: () => void | Promise<void>,
+  primary = false,
+): HTMLElement {
+  const btn = text("button", label, "action");
+  if (primary) btn.classList.add("primary");
+  btn.addEventListener("click", () => void onClick());
+  return btn;
+}
+
+function setStatus(msg: string): void {
+  const status = document.querySelector<HTMLElement>(".status");
+  if (status) status.textContent = msg;
+}
+
+function readText(el: Element | null): string {
+  return el?.textContent?.trim() ?? "";
+}
+
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function div(className: string): HTMLElement {
