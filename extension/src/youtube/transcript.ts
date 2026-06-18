@@ -29,10 +29,24 @@ export class NotAVideoError extends Error {
   }
 }
 
+/**
+ * Thrown when the video HAS captions but YouTube wouldn't let us open/load the
+ * transcript automatically (its newer panel only loads on a real user click).
+ * The user can open it once themselves and retry.
+ */
+export class TranscriptManualError extends Error {
+  constructor(
+    message = "Open this video's transcript, then click Get recipe again.",
+  ) {
+    super(message);
+    this.name = "TranscriptManualError";
+  }
+}
+
 const PAGE_READER_MESSAGE_TAG = "recipeclip-page-reader";
 const PAGE_READER_PATH = "youtube/page-reader.js";
 const PAGE_READER_TIMEOUT_MS = 3000;
-const PANEL_WAIT_MS = 4000;
+const PANEL_WAIT_MS = 12000;
 
 // --- Minimal shapes of the YouTube internals we touch. Intentionally loose. ---
 
@@ -84,13 +98,18 @@ export async function gatherVideoData(): Promise<ExtractRequest> {
     segments: segments.length,
   });
 
-  // Graceful degradation: a missing transcript is fine as long as we have a
-  // description to work from (many cooking videos put the full recipe there).
-  // Only give up when we have neither.
-  if (segments.length === 0 && description.trim() === "") {
-    throw new NoTranscriptError(
-      "This video has no transcript or description to read a recipe from.",
-    );
+  if (segments.length === 0) {
+    const hasCaptions = !!player?.captions?.playerCaptionsTracklistRenderer
+      ?.captionTracks?.length;
+    // Captions exist but we couldn't auto-load them (YouTube's newer transcript
+    // panel only loads on a real click). Ask the user to open it once.
+    if (hasCaptions) throw new TranscriptManualError();
+    // No captions at all: fall back to the description, or give up if empty.
+    if (description.trim() === "") {
+      throw new NoTranscriptError(
+        "This video has no transcript or description to read a recipe from.",
+      );
+    }
   }
 
   return { videoId, title, description, segments };
@@ -257,10 +276,10 @@ async function fetchCaptionTrack(
  */
 async function scrapeTranscriptPanel(): Promise<TranscriptSegment[]> {
   await openTranscriptPanel();
-  const rows = await waitForElements(
-    "ytd-transcript-segment-renderer",
-    PANEL_WAIT_MS,
-  );
+  // A long transcript streams in over several seconds on a cold open, so wait
+  // until the segment count stops growing (or we hit the timeout) rather than
+  // grabbing the first partial batch.
+  const rows = await waitForStableSegments(PANEL_WAIT_MS);
 
   const segments: TranscriptSegment[] = [];
   for (const row of rows) {
@@ -314,20 +333,28 @@ function findButtonByText(phrases: string[]): HTMLElement | null {
 
 // --- Small DOM/util helpers ------------------------------------------------
 
-/** Poll for matching elements until some appear or the timeout elapses. */
-function waitForElements(
-  selector: string,
-  timeoutMs: number,
-): Promise<HTMLElement[]> {
+/**
+ * Poll for transcript segment rows until the count stabilizes (the lazy list
+ * has finished streaming in) or the timeout elapses. Returns whatever rows
+ * exist at that point.
+ */
+function waitForStableSegments(timeoutMs: number): Promise<HTMLElement[]> {
+  const SELECTOR = "ytd-transcript-segment-renderer";
   return new Promise((resolve) => {
     const start = Date.now();
+    let lastCount = -1;
+    let stableTicks = 0;
     const tick = () => {
-      const found = Array.from(
-        document.querySelectorAll<HTMLElement>(selector),
-      );
-      if (found.length > 0) return resolve(found);
-      if (Date.now() - start >= timeoutMs) return resolve([]);
-      setTimeout(tick, 150);
+      const found = Array.from(document.querySelectorAll<HTMLElement>(SELECTOR));
+      if (found.length > 0 && found.length === lastCount) {
+        // Count held steady across polls -> loading finished.
+        if (++stableTicks >= 3) return resolve(found);
+      } else {
+        stableTicks = 0;
+      }
+      lastCount = found.length;
+      if (Date.now() - start >= timeoutMs) return resolve(found);
+      setTimeout(tick, 300);
     };
     tick();
   });

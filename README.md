@@ -117,8 +117,21 @@ By default the extension points at `http://localhost:8787`. See
 | `LLM_PROVIDER`      | backend      | `gemini` (default) or `anthropic`. In `wrangler.toml`. |
 | `GEMINI_API_KEY`    | backend only | Auth for the Gemini API (when provider=gemini).  |
 | `ANTHROPIC_API_KEY` | backend only | Auth for the Claude API (when provider=anthropic). |
+| `INSTACART_API_KEY` | backend only | Optional — enables the "Shop ingredients" button. |
 
 Keys live only in the backend. The extension never sees them.
+
+## Shopping & substitutions
+
+The backend exposes two extra POST endpoints beyond extraction:
+
+- `/shop` — builds an Instacart "shoppable recipe" page from the current
+  ingredients (clean names + scaled quantities) via the Instacart Developer
+  Platform recipe API, and returns a URL the panel opens in a new tab. The user
+  picks the actual products and store on Instacart. Requires `INSTACART_API_KEY`;
+  without it the button reports that shopping isn't configured.
+- `/substitute` — asks the configured LLM for on-demand ingredient
+  substitutions (one call per request), shown inline under the ingredient.
 
 ## Scope
 

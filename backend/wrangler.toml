@@ -9,7 +9,7 @@ compatibility_flags = ["nodejs_compat"]
 # during `wrangler dev`, so this is only needed for deploys.
 [[kv_namespaces]]
 binding = "RECIPE_CACHE"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "59782edcfbf44c5e959c5108d371ad4d"
 
 [vars]
 # Non-secret config. API keys are NOT here — they are secrets (see README).

@@ -29,6 +29,7 @@ const pageScript = {
 async function copyStatic() {
   await cp("manifest.json", `${outdir}/manifest.json`);
   await cp("src/sidepanel/panel.html", `${outdir}/sidepanel/panel.html`);
+  await cp("icons", `${outdir}/icons`, { recursive: true });
 }
 
 const common = {

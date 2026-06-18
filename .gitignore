@@ -16,3 +16,8 @@ backend/dist/
 # OS / editor
 .DS_Store
 *.log
+
+# Local-only store assets & transport files (not part of the codebase)
+screenshots/
+screenshots-raw/
+*.bundle

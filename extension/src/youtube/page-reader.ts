@@ -9,8 +9,26 @@
 const MESSAGE_TAG = "recipeclip-page-reader";
 
 (function emitPlayerResponse() {
-  const w = window as unknown as { ytInitialPlayerResponse?: unknown };
-  const playerResponse = w.ytInitialPlayerResponse ?? null;
+  // Prefer the live player's response — it reflects the CURRENT video even after
+  // YouTube's in-app (SPA) navigation. `window.ytInitialPlayerResponse` goes
+  // stale after navigating to a new video without a full page reload.
+  let playerResponse: unknown = null;
+  try {
+    const player = document.querySelector(
+      "#movie_player, .html5-video-player",
+    ) as { getPlayerResponse?: () => unknown } | null;
+    if (player && typeof player.getPlayerResponse === "function") {
+      playerResponse = player.getPlayerResponse();
+    }
+  } catch {
+    // fall through to the global below
+  }
+  if (!playerResponse) {
+    playerResponse =
+      (window as unknown as { ytInitialPlayerResponse?: unknown })
+        .ytInitialPlayerResponse ?? null;
+  }
+
   window.postMessage(
     { __recipeclip: MESSAGE_TAG, playerResponse },
     window.location.origin,

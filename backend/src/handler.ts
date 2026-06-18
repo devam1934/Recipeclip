@@ -5,7 +5,17 @@ import { createExtractor } from "./llm";
 import { LlmError } from "./llm/provider";
 import { cacheRecipe, getCachedRecipe } from "./cache";
 import { parseExtractRequest } from "./extract";
-import type { Env, ExtractErrorCode, ExtractResponse, Recipe } from "./types";
+import { createRecipePage } from "./instacart";
+import type {
+  Env,
+  ExtractErrorCode,
+  ExtractResponse,
+  Recipe,
+  ShopRequest,
+  ShopResponse,
+  SubstituteRequest,
+  SubstituteResponse,
+} from "./types";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -32,6 +42,10 @@ export default {
       return fail("bad_request", "Body must be valid JSON.", 400);
     }
 
+    const path = new URL(request.url).pathname;
+    if (path === "/shop") return handleShop(body, env);
+    if (path === "/substitute") return handleSubstitute(body, env);
+
     const req = parseExtractRequest(body);
     if (!req) {
       return fail("bad_request", "Missing or malformed fields.", 400);
@@ -50,9 +64,28 @@ export default {
       const extractor = createExtractor(env);
       const recipe = await extractor.extract(req);
 
-      // Cache the result (recipe or non-recipe) so we only call the LLM once
-      // per video.
-      await cacheRecipe(env, req.videoId, recipe);
+      // A usable recipe needs both ingredients and steps. A near-empty result
+      // means the transcript was blocked AND the description has no recipe
+      // (e.g. it just links to an external site). Say so honestly rather than
+      // showing a broken one-line card.
+      const usable =
+        recipe.isRecipe &&
+        recipe.ingredients.length > 0 &&
+        recipe.steps.length > 0;
+
+      if (recipe.isRecipe && !usable) {
+        const message =
+          req.segments.length === 0
+            ? "Couldn't read a full recipe here — the transcript wasn't available and the description doesn't contain the recipe (it likely links to an external site)."
+            : "Couldn't extract a complete recipe from this video.";
+        return fail("not_a_recipe", message, 200);
+      }
+
+      // Cache only solid results extracted WITH a transcript, so a later attempt
+      // can still improve a description-only result.
+      if (usable && req.segments.length > 0) {
+        await cacheRecipe(env, req.videoId, recipe);
+      }
       return respondWith(recipe, false);
     } catch (err) {
       if (err instanceof LlmError) {
@@ -62,6 +95,34 @@ export default {
     }
   },
 };
+
+async function handleShop(body: unknown, env: Env): Promise<Response> {
+  const req = body as ShopRequest;
+  if (!req || typeof req.title !== "string" || !Array.isArray(req.items)) {
+    return json({ ok: false, message: "Bad shop request." } satisfies ShopResponse, 400);
+  }
+  try {
+    const url = await createRecipePage(env, req.title, req.items);
+    return json({ ok: true, url } satisfies ShopResponse, 200);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Could not build cart.";
+    return json({ ok: false, message } satisfies ShopResponse, 502);
+  }
+}
+
+async function handleSubstitute(body: unknown, env: Env): Promise<Response> {
+  const req = body as SubstituteRequest;
+  if (!req || typeof req.dish !== "string" || typeof req.ingredient !== "string") {
+    return json({ ok: false, message: "Bad substitute request." } satisfies SubstituteResponse, 400);
+  }
+  try {
+    const substitutions = await createExtractor(env).substitute(req.dish, req.ingredient);
+    return json({ ok: true, substitutions } satisfies SubstituteResponse, 200);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Could not get substitutions.";
+    return json({ ok: false, message } satisfies SubstituteResponse, 502);
+  }
+}
 
 /** Turn a recipe (fresh or cached) into the right success/non-recipe response. */
 function respondWith(recipe: Recipe, cached: boolean): Response {

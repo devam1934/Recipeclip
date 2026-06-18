@@ -10,12 +10,20 @@ import type { Env, Recipe } from "./types";
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const MIN_TTL_SECONDS = 60; // KV's floor
 
+// Bump this whenever the Recipe shape changes, so old cached entries (with the
+// old shape) are ignored instead of served back missing the new fields.
+const CACHE_VERSION = "v3";
+
+function cacheKey(videoId: string): string {
+  return `${CACHE_VERSION}:${videoId}`;
+}
+
 export async function getCachedRecipe(
   env: Env,
   videoId: string,
 ): Promise<Recipe | null> {
   try {
-    return await env.RECIPE_CACHE.get<Recipe>(videoId, "json");
+    return await env.RECIPE_CACHE.get<Recipe>(cacheKey(videoId), "json");
   } catch {
     return null;
   }
@@ -27,7 +35,7 @@ export async function cacheRecipe(
   recipe: Recipe,
 ): Promise<void> {
   try {
-    await env.RECIPE_CACHE.put(videoId, JSON.stringify(recipe), {
+    await env.RECIPE_CACHE.put(cacheKey(videoId), JSON.stringify(recipe), {
       expirationTtl: ttlSeconds(env),
     });
   } catch {

@@ -3,10 +3,12 @@
 // well-formed Recipe. The vendor-specific call lives in llm/anthropic.ts.
 
 import type {
+  Difficulty,
   ExtractRequest,
   Ingredient,
   Recipe,
   Step,
+  Substitution,
   TranscriptSegment,
 } from "./types";
 
@@ -59,13 +61,32 @@ export const SYSTEM_PROMPT = [
   "  (or your best partial guess). Exact, stated amounts get `uncertain: false`.",
   "",
   "NON-RECIPE DETECTION:",
-  "- If the video is not a cooking recipe (e.g. a vlog, review, or unrelated",
-  "  topic), set `isRecipe` to false, leave ingredients and steps empty, and put",
-  "  a one-line explanation in `notes`. Do not fabricate a recipe.",
+  "- Set `isRecipe` to false ONLY for genuinely non-cooking videos (a vlog,",
+  "  review, or unrelated topic). Leave ingredients/steps empty and explain in",
+  "  `notes`. Do not fabricate a recipe.",
+  "- BUT if it clearly IS a cooking video and the text is just incomplete (e.g.",
+  "  the description links out to sub-recipes, or there's no transcript), keep",
+  "  `isRecipe` true, extract whatever ingredients and steps you can, set",
+  "  `sourceConfidence` to low, and note the limitation. Prefer a partial recipe",
+  "  over rejecting it.",
   "",
   "CONFIDENCE:",
   "- Set `sourceConfidence` to high/medium/low reflecting how complete and",
   "  reliable the extracted recipe is.",
+  "",
+  "EXTRAS (fill these in from the same content — do not guess wildly):",
+  "- `summary`: a one- or two-sentence description of the dish.",
+  "- `dietaryTags`: lowercase tags that clearly apply, from common ones like",
+  "  vegan, vegetarian, gluten-free, dairy-free, nut-free, keto, low-carb. Only",
+  "  include a tag when the recipe genuinely qualifies; otherwise leave it out.",
+  "- `difficulty`: easy, medium, or hard.",
+  "- `cuisine`: e.g. Italian, Mexican, Thai (or null if unclear).",
+  "- `equipment`: notable tools needed (e.g. blender, 9x13 pan, whisk).",
+  "- `backstory`: 2-3 sentences on the dish's origin, history, or region.",
+  "- `chefTip`: one key technique tip that makes or breaks the dish.",
+  "- `nutrition`: a ROUGH per-serving estimate with `calories`, `protein`,",
+  "  `carbs`, and `fat` (grams). Estimate from the ingredients; use null for any",
+  "  value you cannot reasonably estimate.",
 ].join("\n");
 
 /** Build the user message from the gathered data. */
@@ -115,7 +136,41 @@ export function normalizeRecipe(raw: unknown): Recipe {
     notes: asNullableString(r.notes),
     sourceConfidence: asConfidence(r.sourceConfidence),
     isRecipe,
+    summary: asNullableString(r.summary),
+    dietaryTags: asStringArray(r.dietaryTags),
+    difficulty: asDifficulty(r.difficulty),
+    cuisine: asNullableString(r.cuisine),
+    equipment: asStringArray(r.equipment),
+    backstory: asNullableString(r.backstory),
+    chefTip: asNullableString(r.chefTip),
+    nutrition: asNutrition(r.nutrition),
   };
+}
+
+function asNutrition(v: unknown): Recipe["nutrition"] {
+  if (typeof v !== "object" || v === null) return null;
+  const n = v as Record<string, unknown>;
+  const num = (x: unknown): number | null =>
+    typeof x === "number" && Number.isFinite(x) ? Math.round(x) : null;
+  const nutrition = {
+    calories: num(n.calories),
+    protein: num(n.protein),
+    carbs: num(n.carbs),
+    fat: num(n.fat),
+  };
+  // All null -> treat as no estimate.
+  return Object.values(nutrition).some((x) => x !== null) ? nutrition : null;
+}
+
+function asStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((x) => (typeof x === "string" ? x.trim() : ""))
+    .filter((x) => x !== "");
+}
+
+function asDifficulty(v: unknown): Difficulty | null {
+  return v === "easy" || v === "medium" || v === "hard" ? v : null;
 }
 
 function normalizeIngredient(raw: unknown): Ingredient {
@@ -147,4 +202,39 @@ function asNullableString(v: unknown): string | null {
 
 function asConfidence(v: unknown): Recipe["sourceConfidence"] {
   return v === "high" || v === "medium" || v === "low" ? v : "low";
+}
+
+// --- substitutions ---------------------------------------------------------
+
+export const SUBSTITUTE_SYSTEM =
+  "You are a practical cooking assistant. Suggest realistic ingredient " +
+  "substitutions and keep notes short (ratio or effect on taste/texture).";
+
+export function buildSubstitutePrompt(dish: string, ingredient: string): string {
+  return [
+    `Recipe: ${dish || "(unknown dish)"}`,
+    `Ingredient to replace: ${ingredient}`,
+    "",
+    "Suggest 2-4 common substitutions. For each, give the substitute and a",
+    "short note on the ratio to use or its effect.",
+  ].join("\n");
+}
+
+/** Coerce model output (array or { substitutions: [...] }) into Substitutions. */
+export function normalizeSubstitutions(raw: unknown): Substitution[] {
+  const arr = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as { substitutions?: unknown })?.substitutions)
+      ? (raw as { substitutions: unknown[] }).substitutions
+      : [];
+
+  return arr
+    .map((item) => {
+      const s = (item ?? {}) as Record<string, unknown>;
+      return {
+        substitute: asString(s.substitute) ?? "",
+        note: asNullableString(s.note),
+      };
+    })
+    .filter((s) => s.substitute !== "");
 }

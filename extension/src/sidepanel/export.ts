@@ -11,8 +11,29 @@ export function toMarkdown(recipe: Recipe): string {
   const meta = [
     recipe.servings ? `Serves ${recipe.servings}` : null,
     recipe.totalTime,
+    recipe.difficulty,
+    recipe.cuisine,
   ].filter(Boolean);
   if (meta.length) lines.push("", `_${meta.join(" · ")}_`);
+
+  if (recipe.summary) lines.push("", recipe.summary);
+  if (recipe.backstory) lines.push("", `_${recipe.backstory}_`);
+
+  const tags = recipe.dietaryTags ?? [];
+  if (tags.length) lines.push("", `Tags: ${tags.join(", ")}`);
+
+  const n = recipe.nutrition;
+  if (n) {
+    const parts = [
+      n.calories != null ? `${n.calories} kcal` : null,
+      n.protein != null ? `P ${n.protein}g` : null,
+      n.carbs != null ? `C ${n.carbs}g` : null,
+      n.fat != null ? `F ${n.fat}g` : null,
+    ].filter(Boolean);
+    if (parts.length) lines.push("", `Nutrition (per serving, est.): ${parts.join(" · ")}`);
+  }
+
+  if (recipe.chefTip) lines.push("", `**Tip:** ${recipe.chefTip}`);
 
   if (recipe.ingredients.length) {
     lines.push("", "## Ingredients", "");
