@@ -5,7 +5,67 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- The servings scaler and unit toggle now also affect quantities written inside
+  step text (e.g. "1 cup" → "2 cups" / "237 ml"), while deliberately leaving
+  temperatures, times, counts, and pan sizes untouched.
+
 ### Added
+- One-time manual transcript fallback: when a video has captions but YouTube's
+  newer panel won't let us auto-open the transcript, the panel now asks the user
+  to open "Show transcript" once and click Get recipe again — we then read the
+  loaded lines. Auto-extraction still happens with no extra clicks where
+  possible. This makes the core "capture once, never rewatch" goal achievable on
+  effectively any captioned video.
+
+### Fixed
+- Transcript-panel scrape now waits for the lazily-streamed segment list to
+  finish loading (polls until the count stabilizes, up to 12s) instead of
+  grabbing the first partial batch after a fixed 4s. Long transcripts (e.g. a
+  ~9-minute video with 500+ lines) were timing out and yielding nothing on a
+  cold open; the selectors were already correct.
+- Read the current video via `#movie_player.getPlayerResponse()` instead of the
+  stale `window.ytInitialPlayerResponse`, so clicking "Get recipe" after
+  navigating to a new video (e.g. a recommendation) works without a page refresh.
+- Near-empty extractions (no usable ingredients/steps, e.g. when the transcript
+  is blocked and the description only links to an external recipe) now return an
+  honest "couldn't read a full recipe" message instead of a broken one-line card.
+- The "Get recipe" button now shows "Refresh page to use" when its content
+  script has been orphaned by an extension reload, instead of doing nothing.
+- When a transcript can't be fetched, sparse cooking videos are no longer
+  rejected as "not a recipe" — the model now returns a low-confidence partial
+  recipe with a note instead of a dead-end error.
+- Poor results (non-recipe outcomes, or description-only extractions without a
+  transcript) are no longer cached, so a later attempt can produce a better
+  result instead of being stuck. Bumped the cache version to clear stale entries.
+- Suppressed the "Extension context invalidated" error thrown by orphaned
+  content scripts after the extension reloads (guard + stop the observer).
+- Versioned the KV cache key so recipes cached under an older shape are
+  re-extracted instead of served back missing newer fields.
+- Hide the "Serves ?" chip when servings are unknown.
+- Moved "Saved recipes" to its own top nav so the action row isn't crowded.
+
+### Docs
+- Added `docs/LAUNCH.md` (deploy backend, point the extension at it, publish).
+
+### Added
+- Dish backstory/origin and a chef's tip, plus a rough per-serving nutrition
+  estimate shown as a macro ring (protein/carbs/fat) with calories — all folded
+  into the existing extraction call.
+
+### Removed
+- The "Shop ingredients" button (Instacart needs a business API key). The
+  backend `/shop` endpoint remains available behind `INSTACART_API_KEY` for
+  later, but there's no UI for it.
+
+### Added (earlier in this cycle)
+- "Shop ingredients" button: builds an Instacart shoppable-recipe page from the
+  current ingredients (cleaned names + scaled quantities, units mapped to
+  Instacart's supported set) via a new `/shop` backend endpoint, and opens it in
+  a new tab. Requires `INSTACART_API_KEY`.
+- On-demand ingredient substitutions: a per-ingredient swap control fetches
+  suggestions from a new `/substitute` endpoint (via the configured LLM behind
+  the existing provider interface) and shows them inline.
 - Ingredients / Steps / Overview tabs with a sticky header, so you switch
   instead of scrolling.
 - Auto-extracted (free, same LLM call) summary, dietary tags, difficulty,

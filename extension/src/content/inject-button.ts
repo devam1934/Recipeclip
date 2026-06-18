@@ -11,12 +11,26 @@ import {
   gatherVideoData,
   NoTranscriptError,
   NotAVideoError,
+  TranscriptManualError,
 } from "../youtube/transcript";
 
 const BUTTON_ID = "recipeclip-get-recipe";
 
+/** True while this content script's extension context is still valid. After the
+ * extension is reloaded, old injected scripts are orphaned and any chrome.* call
+ * throws "Extension context invalidated". */
+function extensionAlive(): boolean {
+  return Boolean(chrome.runtime?.id);
+}
+
 function send(message: Message): void {
-  chrome.runtime.sendMessage(message).catch(() => {});
+  if (!extensionAlive()) return;
+  try {
+    // sendMessage can throw synchronously when the context is gone.
+    void chrome.runtime.sendMessage(message)?.catch(() => {});
+  } catch {
+    // orphaned content script — ignore
+  }
 }
 
 function createButton(): HTMLButtonElement {
@@ -43,6 +57,14 @@ function createButton(): HTMLButtonElement {
 
 async function onClick(event: Event): Promise<void> {
   const button = event.currentTarget as HTMLButtonElement;
+
+  // If the extension was reloaded, this content script is orphaned and can't
+  // talk to it. Tell the user to refresh rather than failing silently.
+  if (!extensionAlive()) {
+    button.textContent = "↻ Refresh page to use";
+    return;
+  }
+
   button.disabled = true;
   const original = button.textContent;
   button.textContent = "Reading…";
@@ -54,7 +76,14 @@ async function onClick(event: Event): Promise<void> {
     const request = await gatherVideoData();
     send({ type: "EXTRACT_REQUEST", request });
   } catch (err) {
-    if (err instanceof NoTranscriptError) {
+    if (err instanceof TranscriptManualError) {
+      send({
+        type: "GATHER_ERROR",
+        code: "no_transcript",
+        message:
+          "This video's transcript didn't load automatically. Open it on the video (click “…more”, then “Show transcript”), then click Get recipe again — it's a one-time step and the recipe is saved after.",
+      });
+    } else if (err instanceof NoTranscriptError) {
       send({ type: "GATHER_ERROR", code: "no_transcript", message: err.message });
     } else if (err instanceof NotAVideoError) {
       send({ type: "GATHER_ERROR", code: "bad_request", message: err.message });
@@ -131,6 +160,12 @@ chrome.runtime.onMessage.addListener((raw) => {
 
 // YouTube is a SPA: re-inject after in-app navigation and after late renders.
 document.addEventListener("yt-navigate-finish", () => injectButton());
-const observer = new MutationObserver(() => injectButton());
+const observer = new MutationObserver(() => {
+  if (!extensionAlive()) {
+    observer.disconnect(); // stop an orphaned script from spamming errors
+    return;
+  }
+  injectButton();
+});
 observer.observe(document.documentElement, { childList: true, subtree: true });
 injectButton();

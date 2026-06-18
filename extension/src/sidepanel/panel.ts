@@ -6,11 +6,12 @@
 // scaler, and collapsible sections. The service worker owns the fetch/loading
 // state; everything below is local UI state.
 
+import { SUBSTITUTE_URL } from "../shared/config";
 import { isMessage, type Message, type PanelState } from "../shared/messages";
-import type { Recipe } from "../shared/types";
+import type { Nutrition, Recipe, SubstituteResponse } from "../shared/types";
 import { formatTimestamp, toMarkdown } from "./export";
 import { scaleServings } from "./scale";
-import { convertMeasure, type UnitSystem } from "./units";
+import { convertInText, convertMeasure, type UnitSystem } from "./units";
 import {
   deleteRecipe,
   listSavedRecipes,
@@ -199,6 +200,77 @@ function formatDate(ms: number): string {
   return new Date(ms).toLocaleDateString();
 }
 
+// --- nutrition ring --------------------------------------------------------
+
+const MACRO_COLORS = { protein: "#3b82f6", carbs: "#f59e0b", fat: "#ef4444" };
+
+function nutritionRing(n: Nutrition): HTMLElement {
+  const p = n.protein ?? 0;
+  const c = n.carbs ?? 0;
+  const f = n.fat ?? 0;
+  const cals = { protein: p * 4, carbs: c * 4, fat: f * 9 };
+  const total = cals.protein + cals.carbs + cals.fat;
+  const kcal = n.calories ?? (total > 0 ? Math.round(total) : null);
+
+  const size = 76;
+  const cx = size / 2;
+  const r = 28;
+  const circ = 2 * Math.PI * r;
+
+  const svg = svg_("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}` });
+  svg.appendChild(svg_("circle", { cx, cy: cx, r, fill: "none", stroke: "var(--line)", "stroke-width": 8 }));
+
+  if (total > 0) {
+    let offset = 0;
+    for (const key of ["protein", "carbs", "fat"] as const) {
+      const len = (cals[key] / total) * circ;
+      if (len <= 0) continue;
+      svg.appendChild(svg_("circle", {
+        cx, cy: cx, r, fill: "none",
+        stroke: MACRO_COLORS[key], "stroke-width": 8,
+        "stroke-dasharray": `${len} ${circ - len}`,
+        "stroke-dashoffset": `${-offset}`,
+        transform: `rotate(-90 ${cx} ${cx})`,
+      }));
+      offset += len;
+    }
+  }
+
+  if (kcal !== null) {
+    const t = svg_("text", { x: cx, y: cx - 1, "text-anchor": "middle", "dominant-baseline": "middle", "font-size": 14, "font-weight": 600, fill: "var(--fg)" });
+    t.textContent = String(kcal);
+    svg.appendChild(t);
+    const u = svg_("text", { x: cx, y: cx + 12, "text-anchor": "middle", "font-size": 8, fill: "var(--muted)" });
+    u.textContent = "kcal";
+    svg.appendChild(u);
+  }
+
+  const row = el("div", "nutri-row");
+  row.appendChild(svg);
+  const legend = el("div", "nutri-legend");
+  legend.append(
+    macroLegend("Protein", n.protein, MACRO_COLORS.protein),
+    macroLegend("Carbs", n.carbs, MACRO_COLORS.carbs),
+    macroLegend("Fat", n.fat, MACRO_COLORS.fat),
+  );
+  row.appendChild(legend);
+  return row;
+}
+
+function macroLegend(label: string, grams: number | null, color: string): HTMLElement {
+  const item = el("div", "nutri-item");
+  const dot = el("span", "nutri-dot");
+  dot.style.background = color;
+  item.append(dot, document.createTextNode(`${label}: ${grams === null ? "—" : `${grams} g`}`));
+  return item;
+}
+
+function svg_(name: string, attrs: Record<string, string | number>): SVGElement {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
+  return e;
+}
+
 // --- the card --------------------------------------------------------------
 
 function renderCard(): void {
@@ -210,6 +282,12 @@ function card(r: Recipe): DocumentFragment {
 
   // --- sticky header: stays put while a tab's list scrolls ---
   const head = el("div", "head");
+
+  const nav = el("div", "nav");
+  const savedBtn = textEl("button", "☰ Saved recipes", "icon-btn");
+  savedBtn.addEventListener("click", openLibrary);
+  nav.appendChild(savedBtn);
+  head.appendChild(nav);
 
   const top = el("div", "top");
   const title = textEl("h1", r.title, "title");
@@ -284,10 +362,25 @@ function overviewBody(r: Recipe): HTMLElement {
     wrap.appendChild(textEl("p", r.summary, "summary"));
   }
 
+  if (!editMode && r.backstory) {
+    wrap.appendChild(textEl("div", "Origin", "ov-label"));
+    wrap.appendChild(textEl("p", r.backstory, "summary"));
+  }
+
+  if (!editMode && r.chefTip) {
+    wrap.appendChild(textEl("div", "Chef's tip", "ov-label"));
+    wrap.appendChild(textEl("p", r.chefTip, "summary"));
+  }
+
   const facts: string[] = [];
   if (r.difficulty) facts.push(`Difficulty: ${r.difficulty}`);
   if (r.cuisine) facts.push(`Cuisine: ${r.cuisine}`);
   if (facts.length) wrap.appendChild(textEl("div", facts.join("  ·  "), "ov-facts"));
+
+  if (!editMode && r.nutrition) {
+    wrap.appendChild(textEl("div", "Nutrition · estimate, per serving", "ov-label"));
+    wrap.appendChild(nutritionRing(r.nutrition));
+  }
 
   const equipment = r.equipment ?? [];
   if (equipment.length) {
@@ -316,26 +409,29 @@ function overviewBody(r: Recipe): HTMLElement {
 function chips(r: Recipe): HTMLElement {
   const wrap = el("div", "chips");
 
-  const serves = el("span", "chip");
-  serves.appendChild(document.createTextNode("🍽 "));
   if (editMode) {
-    serves.appendChild(document.createTextNode("Serves "));
-    serves.appendChild(makeEditable(textEl("span", r.servings ?? ""), "r-servings", "?"));
-  } else {
-    serves.appendChild(document.createTextNode(`Serves ${scaleServings(r.servings, scale) ?? "?"}`));
+    // In edit mode show both fields (editable) even when empty.
+    const serves = el("span", "chip");
+    serves.append(
+      document.createTextNode("🍽 Serves "),
+      makeEditable(textEl("span", r.servings ?? ""), "r-servings", "?"),
+    );
+    const time = el("span", "chip");
+    time.append(
+      document.createTextNode("⏱ "),
+      makeEditable(textEl("span", r.totalTime ?? ""), "r-totaltime", "total time"),
+    );
+    wrap.append(serves, time);
+    return wrap;
   }
-  wrap.appendChild(serves);
 
-  const time = el("span", "chip");
-  time.appendChild(document.createTextNode("⏱ "));
-  if (editMode) {
-    time.appendChild(makeEditable(textEl("span", r.totalTime ?? ""), "r-totaltime", "total time"));
-  } else if (r.totalTime) {
-    time.appendChild(document.createTextNode(r.totalTime));
-  } else {
-    return wrap; // no time chip if unknown and not editing
+  // View mode: only show a chip when we actually have the value (no "Serves ?").
+  if (r.servings) {
+    wrap.appendChild(textEl("span", `🍽 Serves ${scaleServings(r.servings, scale)}`, "chip"));
   }
-  wrap.appendChild(time);
+  if (r.totalTime) {
+    wrap.appendChild(textEl("span", `⏱ ${r.totalTime}`, "chip"));
+  }
   return wrap;
 }
 
@@ -390,7 +486,6 @@ function controlBar(): HTMLElement {
 
   const actions = el("div", "actions");
   actions.append(
-    actionBtn("Saved", openLibrary),
     actionBtn("Copy", onCopy),
     actionBtn("Export", onExport),
     actionBtn("Save", onSave),
@@ -420,6 +515,8 @@ function ingredientsBody(r: Recipe): HTMLElement {
       row.append(edit, uncertainToggle(ing.uncertain), removeButton(row));
     } else {
       if (checkedIngredients.has(i)) row.classList.add("done");
+      row.classList.add("ing-col");
+      const line = el("div", "ing-line");
       const check = textEl("span", "✓", "check");
       check.addEventListener("click", () => toggleCheck(row, check, checkedIngredients, i));
       const text = el("span", "text");
@@ -428,7 +525,12 @@ function ingredientsBody(r: Recipe): HTMLElement {
       if (qty) text.appendChild(textEl("span", qty + " ", "amount"));
       text.appendChild(document.createTextNode(ing.name));
       if (ing.uncertain) text.appendChild(textEl("span", "approx", "tag"));
-      row.append(check, text);
+      const subs = el("div", "subs");
+      const swap = textEl("button", "⇄", "swap");
+      swap.title = "Find substitutions";
+      swap.addEventListener("click", () => void toggleSubs(ing.name, subs, swap));
+      line.append(check, text, swap);
+      row.append(line, subs);
     }
     wrap.appendChild(row);
   });
@@ -464,7 +566,7 @@ function stepsBody(r: Recipe): HTMLElement {
         num.textContent = on ? "✓" : String(i + 1);
       });
       const col = el("div", "text");
-      col.appendChild(textEl("div", step.instruction));
+      col.appendChild(textEl("div", convertInText(step.instruction, units, scale)));
       if (step.timestamp !== null) col.appendChild(timestampPill(step.timestamp));
       row.append(num, col);
     }
@@ -549,6 +651,43 @@ async function onSave(): Promise<void> {
   setStatus("Saved.");
 }
 
+/** Toggle the inline substitutions panel for an ingredient. */
+async function toggleSubs(name: string, container: HTMLElement, swap: HTMLElement): Promise<void> {
+  if (container.childElementCount > 0) {
+    container.replaceChildren();
+    swap.classList.remove("on");
+    return;
+  }
+  swap.classList.add("on");
+  container.replaceChildren(textEl("div", "Finding substitutions…", "sub-loading"));
+
+  try {
+    const res = await fetch(SUBSTITUTE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dish: recipe?.title ?? "", ingredient: name }),
+    });
+    const data = (await res.json()) as SubstituteResponse;
+    if (!data.ok) {
+      container.replaceChildren(textEl("div", data.message, "sub-loading"));
+      return;
+    }
+    if (data.substitutions.length === 0) {
+      container.replaceChildren(textEl("div", "No substitutions found.", "sub-loading"));
+      return;
+    }
+    container.replaceChildren();
+    for (const s of data.substitutions) {
+      const item = el("div", "sub-item");
+      item.appendChild(textEl("span", s.substitute, "sub-name"));
+      if (s.note) item.appendChild(textEl("span", ` — ${s.note}`, "sub-note"));
+      container.appendChild(item);
+    }
+  } catch {
+    container.replaceChildren(textEl("div", "Couldn't load substitutions.", "sub-loading"));
+  }
+}
+
 /** The recipe as currently shown: edits captured, scaling + units applied. */
 function effectiveRecipe(): Recipe {
   if (editMode) readDomIntoRecipe();
@@ -560,6 +699,10 @@ function effectiveRecipe(): Recipe {
       const m = convertMeasure(ing.amount, ing.unit, units, scale);
       return { ...ing, amount: m.amount, unit: m.unit };
     }),
+    steps: base.steps.map((s) => ({
+      ...s,
+      instruction: convertInText(s.instruction, units, scale),
+    })),
   };
 }
 

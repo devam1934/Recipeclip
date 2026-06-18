@@ -2,7 +2,7 @@
 // on this interface, never on a specific vendor SDK. To switch providers, write
 // a new class that implements RecipeExtractor and change one line in handler.ts.
 
-import type { ExtractRequest, Recipe } from "../types";
+import type { ExtractRequest, Recipe, Substitution } from "../types";
 
 export interface RecipeExtractor {
   /**
@@ -12,6 +12,9 @@ export interface RecipeExtractor {
    * Throws LlmError on provider/transport failures.
    */
   extract(input: ExtractRequest): Promise<Recipe>;
+
+  /** Suggest substitutions for one ingredient in the context of a dish. */
+  substitute(dish: string, ingredient: string): Promise<Substitution[]>;
 }
 
 /** Raised for any failure talking to the LLM provider. */

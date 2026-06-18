@@ -7,8 +7,15 @@
 // normalizeRecipe() before leaving the backend.
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { ExtractRequest, Recipe } from "../types";
-import { buildUserPrompt, normalizeRecipe, SYSTEM_PROMPT } from "../extract";
+import type { ExtractRequest, Recipe, Substitution } from "../types";
+import {
+  buildSubstitutePrompt,
+  buildUserPrompt,
+  normalizeRecipe,
+  normalizeSubstitutions,
+  SUBSTITUTE_SYSTEM,
+  SYSTEM_PROMPT,
+} from "../extract";
 import { LlmError, type RecipeExtractor } from "./provider";
 
 const MODEL = "claude-sonnet-4-6";
@@ -65,6 +72,17 @@ const RECIPE_TOOL: Anthropic.Tool = {
       difficulty: { type: ["string", "null"], enum: ["easy", "medium", "hard", null] },
       cuisine: { type: ["string", "null"] },
       equipment: { type: "array", items: { type: "string" } },
+      backstory: { type: ["string", "null"] },
+      chefTip: { type: ["string", "null"] },
+      nutrition: {
+        type: ["object", "null"],
+        properties: {
+          calories: { type: ["number", "null"] },
+          protein: { type: ["number", "null"] },
+          carbs: { type: ["number", "null"] },
+          fat: { type: ["number", "null"] },
+        },
+      },
     },
     required: ["title", "ingredients", "steps", "sourceConfidence", "isRecipe"],
   },
@@ -104,4 +122,47 @@ export class AnthropicExtractor implements RecipeExtractor {
 
     return normalizeRecipe(toolUse.input);
   }
+
+  async substitute(dish: string, ingredient: string): Promise<Substitution[]> {
+    let message: Anthropic.Message;
+    try {
+      message = await this.client.messages.create({
+        model: MODEL,
+        max_tokens: 1024,
+        system: SUBSTITUTE_SYSTEM,
+        tools: [SUBSTITUTION_TOOL],
+        tool_choice: { type: "tool", name: SUBSTITUTION_TOOL.name },
+        messages: [{ role: "user", content: buildSubstitutePrompt(dish, ingredient) }],
+      });
+    } catch (err) {
+      throw new LlmError(err instanceof Error ? err.message : "Unknown LLM error");
+    }
+
+    const toolUse = message.content.find(
+      (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+    );
+    return normalizeSubstitutions(toolUse?.input);
+  }
 }
+
+const SUBSTITUTION_TOOL: Anthropic.Tool = {
+  name: "save_substitutions",
+  description: "Save the list of ingredient substitutions.",
+  input_schema: {
+    type: "object",
+    properties: {
+      substitutions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            substitute: { type: "string" },
+            note: { type: ["string", "null"] },
+          },
+          required: ["substitute"],
+        },
+      },
+    },
+    required: ["substitutions"],
+  },
+};

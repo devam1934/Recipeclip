@@ -114,6 +114,21 @@ function pickWeight(g: number, system: UnitSystem): Measure {
   return { amount: formatQuantity(oz), unit: "oz" };
 }
 
+// Matches "<qty> <unit>" only when the unit is a real cooking measurement, so
+// we scale "1 cup" / "200 g" but never bare numbers like oven temps ("350°F"),
+// times ("20 minutes"), counts ("2 eggs"), or pan sizes ("9x13").
+const STEP_MEASURE_RE =
+  /(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*(tablespoons?|tbsp|tbs|teaspoons?|tsp|cups?|fl\s?oz|fluid ounces?|ounces?|oz|pounds?|lbs?|lb|kilograms?|kg|grams?|g|milliliters?|ml|litres?|liters?|l|pints?|quarts?|gallons?)\b/gi;
+
+/** Scale/convert any measured quantities embedded in free text (step prose). */
+export function convertInText(text: string, system: UnitSystem, scale: number): string {
+  if (system === "orig" && scale === 1) return text;
+  return text.replace(STEP_MEASURE_RE, (_match, qty: string, unit: string) => {
+    const m = convertMeasure(qty, unit, system, scale);
+    return [m.amount, m.unit].filter(Boolean).join(" ");
+  });
+}
+
 /** Metric numbers read better as plain decimals than fractions. */
 function formatMetric(value: number): string {
   if (value >= 100) return String(Math.round(value));

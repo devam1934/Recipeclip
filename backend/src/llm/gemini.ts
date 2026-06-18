@@ -8,8 +8,15 @@
 // Note: Gemini's schema dialect differs slightly from JSON Schema — nullable
 // fields use `nullable: true` rather than a `["string", "null"]` type union.
 
-import type { ExtractRequest, Recipe } from "../types";
-import { buildUserPrompt, normalizeRecipe, SYSTEM_PROMPT } from "../extract";
+import type { ExtractRequest, Recipe, Substitution } from "../types";
+import {
+  buildSubstitutePrompt,
+  buildUserPrompt,
+  normalizeRecipe,
+  normalizeSubstitutions,
+  SUBSTITUTE_SYSTEM,
+  SYSTEM_PROMPT,
+} from "../extract";
 import { LlmError, type RecipeExtractor } from "./provider";
 
 const MODEL = "gemini-2.5-flash";
@@ -55,6 +62,18 @@ const RECIPE_SCHEMA = {
     difficulty: { type: "string", enum: ["easy", "medium", "hard"], nullable: true },
     cuisine: { type: "string", nullable: true },
     equipment: { type: "array", items: { type: "string" } },
+    backstory: { type: "string", nullable: true },
+    chefTip: { type: "string", nullable: true },
+    nutrition: {
+      type: "object",
+      nullable: true,
+      properties: {
+        calories: { type: "number", nullable: true },
+        protein: { type: "number", nullable: true },
+        carbs: { type: "number", nullable: true },
+        fat: { type: "number", nullable: true },
+      },
+    },
   },
   required: ["title", "ingredients", "steps", "sourceConfidence", "isRecipe"],
 };
@@ -65,18 +84,54 @@ interface GeminiResponse {
   }[];
 }
 
+const SUBSTITUTION_SCHEMA = {
+  type: "object",
+  properties: {
+    substitutions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          substitute: { type: "string" },
+          note: { type: "string", nullable: true },
+        },
+        required: ["substitute"],
+      },
+    },
+  },
+  required: ["substitutions"],
+};
+
 export class GeminiExtractor implements RecipeExtractor {
   constructor(private apiKey: string) {}
 
   async extract(input: ExtractRequest): Promise<Recipe> {
+    const parsed = await this.generate(SYSTEM_PROMPT, buildUserPrompt(input), RECIPE_SCHEMA);
+    return normalizeRecipe(parsed);
+  }
+
+  async substitute(dish: string, ingredient: string): Promise<Substitution[]> {
+    const parsed = await this.generate(
+      SUBSTITUTE_SYSTEM,
+      buildSubstitutePrompt(dish, ingredient),
+      SUBSTITUTION_SCHEMA,
+    );
+    return normalizeSubstitutions(parsed);
+  }
+
+  /** Single structured-output call: returns the parsed JSON object. */
+  private async generate(
+    system: string,
+    user: string,
+    responseSchema: unknown,
+  ): Promise<unknown> {
     const body = {
-      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: [{ role: "user", parts: [{ text: buildUserPrompt(input) }] }],
+      system_instruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts: [{ text: user }] }],
       generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: RECIPE_SCHEMA,
-        // Extraction doesn't need extended reasoning; disabling "thinking"
-        // makes 2.5 Flash much faster (and cheaper).
+        responseSchema,
+        // Disable "thinking" — these tasks don't need it and it's much faster.
         thinkingConfig: { thinkingBudget: 0 },
       },
     };
@@ -100,13 +155,10 @@ export class GeminiExtractor implements RecipeExtractor {
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new LlmError("Gemini returned no content.");
 
-    let parsed: unknown;
     try {
-      parsed = JSON.parse(text);
+      return JSON.parse(text);
     } catch {
       throw new LlmError("Gemini returned invalid JSON.");
     }
-
-    return normalizeRecipe(parsed);
   }
 }
