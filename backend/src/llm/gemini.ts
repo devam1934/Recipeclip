@@ -148,6 +148,12 @@ export class GeminiExtractor implements RecipeExtractor {
     }
 
     if (!res.ok) {
+      // Free-tier rate/quota limit — show a friendly, retry-able message.
+      if (res.status === 429) {
+        throw new LlmError(
+          "RecipeClip has hit its free AI usage limit for now. Please try again in a few minutes.",
+        );
+      }
       throw new LlmError(`Gemini API error ${res.status}: ${await res.text()}`);
     }
 

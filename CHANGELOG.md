@@ -11,6 +11,9 @@ All notable changes to RecipeClip are recorded here. Format loosely follows
   temperatures, times, counts, and pan sizes untouched.
 
 ### Added
+- Extension icons (16/48/128) wired into the manifest and copied by the build.
+- Friendly, retry-able message when the Gemini free-tier rate limit (HTTP 429)
+  is hit, instead of a raw API error.
 - One-time manual transcript fallback: when a video has captions but YouTube's
   newer panel won't let us auto-open the transcript, the panel now asks the user
   to open "Show transcript" once and click Get recipe again — we then read the
